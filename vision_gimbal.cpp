@@ -178,16 +178,16 @@ static CameraIntrinsics kCamIntrinsics{
 };
 static double kTargetCircleRadiusM = 0.0675;
 static double kPathCenterForwardM = 2.0;
-static double kPathCenterLeftM = 0.0;
-static double kPathCenterHeightM = 0.3;
-static double kPathRadiusM = 0.3;
+static double kPathCenterLeftM = -0.08;
+static double kPathCenterHeightM = 0.28;
+static double kPathRadiusM = 0.28;
 // 固定角速度大小（弧度/秒）；旋转方向从连续帧观测得到。
 static double kTargetAngularSpeedRadPerSec =
     3.14159265358979323846 / 5.0;
-static double kProjectileSpeedMps = 5.0; //弹丸发射速度
-static double kMaxReprojErrPx = 5.0; // PnP 四点重投影 RMS 上限，单位像素
+static units::second_t kTargetLeadTime{0.2}; // 目标运动提前量时间，默认 200 ms
+static double kMaxReprojErrPx = 15; // PnP 四点重投影 RMS 上限，单位像素
 static double kMaxPathErrM = 0.15;  // PnP 位置到目标轨迹的距离上限，单位米
-static double kYawZeroDeg = 20.0;
+static double kYawZeroDeg = 0.0;
 static double kPitchZeroDeg = 0.0;
 static double kCamForwardM = 0.00934;
 static double kCamLeftM = 0.0;
@@ -196,8 +196,8 @@ static double kMuzzleForwardM = 0.05139;
 static double kMuzzleLeftM = 0.0;
 static double kMuzzleUpM = 0.0622;
 
-static double kYawSign = -1.0;      // 几何坐标的左正转换为云台 yaw 右正
-static double kPitchSign = -1.0;     // 几何坐标的向上正对应云台 pitch 向上正
+static double kYawSign = 1.0;       // 几何坐标左正；反馈/命令左转为正
+static double kPitchSign = -1.0;    // 几何坐标抬头为正；反馈/命令抬头为负
 
 // 瞄准与开火
 static double kAimTolDeg = 0.6;       // yaw、pitch 误差均小于此值才算对准，单位度
@@ -226,11 +226,11 @@ static turret_kinematics::Rotation3d makeGimbalRotation(
     const TRoMaC::GimbalFeedback& feedback)
 {
     constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
-    const double yawRad = -(static_cast<double>(feedback.yaw_angle) -
-                            kYawZeroDeg) * kDegToRad;
+    const double yawRad =
+        (static_cast<double>(feedback.yaw_angle) - kYawZeroDeg) * kDegToRad;
     const double pitchRad =
         (static_cast<double>(feedback.pitch_angle) - kPitchZeroDeg) * kDegToRad;
-    return {0.0, -pitchRad, yawRad};
+    return {0.0, pitchRad, yawRad};
 }
 
 static turret_kinematics::Pose3d makeCamPose(
@@ -407,11 +407,9 @@ int main()
         {kPathCenterForwardM, kPathCenterLeftM, kPathCenterHeightM},
         units::meter_t{kPathRadiusM},
         {0.0, kPi / 2.0, 0.0}};
-    turret_kinematics::Aimer::Config aimerCfg;
-    aimerCfg.projectileSpeed = units::meters_per_second_t{kProjectileSpeedMps};
     TargetBuilder targetBuilder{
         kCamIntrinsics, tgtPath, units::meter_t{kTargetCircleRadiusM},
-        aimerCfg, kYawZeroDeg, kPitchZeroDeg, kYawSign, kPitchSign,
+        kTargetLeadTime, kYawZeroDeg, kPitchZeroDeg, kYawSign, kPitchSign,
         kMaxReprojErrPx, kMaxPathErrM, kTargetAngularSpeedRadPerSec};
     TargetTrajectoryDrawer trajectoryDrawer{kCamIntrinsics, tgtPath};
     if (!targetBuilder.IsConfigured())
@@ -501,7 +499,6 @@ int main()
         if (feedbackValid)
         {
             camPose = makeCamPose(feedback);
-            trajectoryDrawer.Draw(image, *camPose);
         }
         if (target.valid && feedbackValid)
         {
@@ -515,6 +512,10 @@ int main()
                     tgtEstimate->yawTarget.value() * kRadToDeg,
                     tgtEstimate->pitchTarget.value() * kRadToDeg};
             }
+        }
+        if (camPose)
+        {
+            trajectoryDrawer.Draw(image, *camPose);
         }
         superStructure.setAimTarget(aimTargetDeg);
         const int controllerNow = static_cast<int>(
@@ -550,8 +551,11 @@ int main()
                     controlOutput.aimErrorDeg.yaw,
                     controlOutput.aimErrorDeg.pitch,
                     tgtEstimate->reprojErrPx)
-                : (targetBuilder.IsConfigured()
-                    ? "3D aim unavailable" : "3D aim not calibrated");
+                : (!targetBuilder.IsConfigured()
+                    ? "3D aim not calibrated"
+                    : (!feedbackValid
+                        ? "3D aim waiting for feedback"
+                        : "3D aim unavailable"));
             cv::putText(image, aimText,
                         cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7,
                         cv::Scalar(0, 255, 255), 2);
@@ -586,6 +590,28 @@ int main()
                     feedbackValid ? cv::Scalar(255, 255, 255)
                                   : (feedbackReceived ? cv::Scalar(0, 165, 255)
                                                       : cv::Scalar(0, 0, 255)), 2);
+        cv::putText(image,
+                    cv::format("command yaw=%.2f pitch=%.2f",
+                               controlOutput.axis.yaw,
+                               controlOutput.axis.pitch),
+                    cv::Point(10, 180), cv::FONT_HERSHEY_SIMPLEX, 0.65,
+                    cv::Scalar(255, 255, 255), 2);
+        if (tgtEstimate)
+        {
+            constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
+            cv::putText(
+                image,
+                cv::format("bearing yaw=%.2f pitch=%.2f lead=%.2f,%.2f flight=%.3fs",
+                           tgtEstimate->yawBearingTarget.value() * kRadToDeg,
+                           tgtEstimate->pitchBearingTarget.value() * kRadToDeg,
+                           (tgtEstimate->yawTarget.value() -
+                            tgtEstimate->yawBearingTarget.value()) * kRadToDeg,
+                           (tgtEstimate->pitchTarget.value() -
+                            tgtEstimate->pitchBearingTarget.value()) * kRadToDeg,
+                           tgtEstimate->flightTime.value()),
+                cv::Point(10, 210), cv::FONT_HERSHEY_SIMPLEX, 0.58,
+                cv::Scalar(255, 255, 255), 2);
+        }
         cv::putText(image, std::string("state=") + superStructure.getstateName(),
                     cv::Point(10, 150), cv::FONT_HERSHEY_SIMPLEX, 0.65,
                     cv::Scalar(255, 255, 255), 2);

@@ -1,0 +1,47 @@
+[
+{
+  "directory": "/home/tromac-test/vision/3D/3D_gimbal/build-local",
+  "command": "/usr/bin/c++  -I/home/tromac-test/vision/3D/3D_gimbal -I/home/tromac-test/vision/3D/3D_gimbal/Serial -I/home/tromac-test/vision/3D/3D_gimbal/turret_kinematics/include -isystem /usr/local/include/opencv4 -O3 -DNDEBUG -std=gnu++20 -o CMakeFiles/vision_gimbal.dir/vision_gimbal.cpp.o -c /home/tromac-test/vision/3D/3D_gimbal/vision_gimbal.cpp",
+  "file": "/home/tromac-test/vision/3D/3D_gimbal/vision_gimbal.cpp"
+},
+{
+  "directory": "/home/tromac-test/vision/3D/3D_gimbal/build-local",
+  "command": "/usr/bin/c++  -I/home/tromac-test/vision/3D/3D_gimbal -I/home/tromac-test/vision/3D/3D_gimbal/Serial -I/home/tromac-test/vision/3D/3D_gimbal/turret_kinematics/include -isystem /usr/local/include/opencv4 -O3 -DNDEBUG -std=gnu++20 -o CMakeFiles/vision_gimbal.dir/TargetBuilder.cpp.o -c /home/tromac-test/vision/3D/3D_gimbal/TargetBuilder.cpp",
+  "file": "/home/tromac-test/vision/3D/3D_gimbal/TargetBuilder.cpp"
+},
+{
+  "directory": "/home/tromac-test/vision/3D/3D_gimbal/build-local",
+  "command": "/usr/bin/c++  -I/home/tromac-test/vision/3D/3D_gimbal -I/home/tromac-test/vision/3D/3D_gimbal/Serial -I/home/tromac-test/vision/3D/3D_gimbal/turret_kinematics/include -isystem /usr/local/include/opencv4 -O3 -DNDEBUG -std=gnu++20 -o CMakeFiles/vision_gimbal.dir/TargetTrajectoryDrawer.cpp.o -c /home/tromac-test/vision/3D/3D_gimbal/TargetTrajectoryDrawer.cpp",
+  "file": "/home/tromac-test/vision/3D/3D_gimbal/TargetTrajectoryDrawer.cpp"
+},
+{
+  "directory": "/home/tromac-test/vision/3D/3D_gimbal/build-local",
+  "command": "/usr/bin/c++  -I/home/tromac-test/vision/3D/3D_gimbal -I/home/tromac-test/vision/3D/3D_gimbal/Serial -I/home/tromac-test/vision/3D/3D_gimbal/turret_kinematics/include -isystem /usr/local/include/opencv4 -O3 -DNDEBUG -std=gnu++20 -o CMakeFiles/vision_gimbal.dir/FireControl.cpp.o -c /home/tromac-test/vision/3D/3D_gimbal/FireControl.cpp",
+  "file": "/home/tromac-test/vision/3D/3D_gimbal/FireControl.cpp"
+},
+{
+  "directory": "/home/tromac-test/vision/3D/3D_gimbal/build-local",
+  "command": "/usr/bin/c++  -I/home/tromac-test/vision/3D/3D_gimbal -I/home/tromac-test/vision/3D/3D_gimbal/Serial -I/home/tromac-test/vision/3D/3D_gimbal/turret_kinematics/include -isystem /usr/local/include/opencv4 -O3 -DNDEBUG -std=gnu++20 -o CMakeFiles/vision_gimbal.dir/RingDetector.cpp.o -c /home/tromac-test/vision/3D/3D_gimbal/RingDetector.cpp",
+  "file": "/home/tromac-test/vision/3D/3D_gimbal/RingDetector.cpp"
+},
+{
+  "directory": "/home/tromac-test/vision/3D/3D_gimbal/build-local",
+  "command": "/usr/bin/c++  -I/home/tromac-test/vision/3D/3D_gimbal -I/home/tromac-test/vision/3D/3D_gimbal/Serial -I/home/tromac-test/vision/3D/3D_gimbal/turret_kinematics/include -isystem /usr/local/include/opencv4 -O3 -DNDEBUG -std=gnu++20 -o CMakeFiles/vision_gimbal.dir/Debouncer.cpp.o -c /home/tromac-test/vision/3D/3D_gimbal/Debouncer.cpp",
+  "file": "/home/tromac-test/vision/3D/3D_gimbal/Debouncer.cpp"
+},
+{
+  "directory": "/home/tromac-test/vision/3D/3D_gimbal/build-local",
+  "command": "/usr/bin/c++  -I/home/tromac-test/vision/3D/3D_gimbal -I/home/tromac-test/vision/3D/3D_gimbal/Serial -I/home/tromac-test/vision/3D/3D_gimbal/turret_kinematics/include -isystem /usr/local/include/opencv4 -O3 -DNDEBUG -std=gnu++20 -o CMakeFiles/vision_gimbal.dir/MathUtils.cpp.o -c /home/tromac-test/vision/3D/3D_gimbal/MathUtils.cpp",
+  "file": "/home/tromac-test/vision/3D/3D_gimbal/MathUtils.cpp"
+},
+{
+  "directory": "/home/tromac-test/vision/3D/3D_gimbal/build-local/Serial",
+  "command": "/usr/bin/c++  -I/home/tromac-test/vision/3D/3D_gimbal/Serial -O3 -DNDEBUG -Wall -Wextra -Wpedantic -std=gnu++20 -o CMakeFiles/tromac_serial.dir/Serial.cpp.o -c /home/tromac-test/vision/3D/3D_gimbal/Serial/Serial.cpp",
+  "file": "/home/tromac-test/vision/3D/3D_gimbal/Serial/Serial.cpp"
+},
+{
+  "directory": "/home/tromac-test/vision/3D/3D_gimbal/build-local/turret_kinematics",
+  "command": "/usr/bin/c++  -I/home/tromac-test/vision/3D/3D_gimbal/turret_kinematics/include -O3 -DNDEBUG -std=gnu++20 -o CMakeFiles/test_turret_kinematics.dir/tests/test_turret_kinematics.cpp.o -c /home/tromac-test/vision/3D/3D_gimbal/turret_kinematics/tests/test_turret_kinematics.cpp",
+  "file": "/home/tromac-test/vision/3D/3D_gimbal/turret_kinematics/tests/test_turret_kinematics.cpp"
+}
+]

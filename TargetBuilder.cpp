@@ -21,7 +21,7 @@ constexpr double kRadToDeg = 180.0 / kPi;
 TargetBuilder::TargetBuilder(CameraIntrinsics camIntrinsics,
                              CircularTargetPath tgtPath,
                              units::meter_t tgtRad,
-                             turret_kinematics::Aimer::Config aimerCfg,
+                             units::second_t targetLeadTime,
                              double yawZeroDeg,
                              double pitchZeroDeg,
                              double yawSign,
@@ -32,7 +32,7 @@ TargetBuilder::TargetBuilder(CameraIntrinsics camIntrinsics,
     : camIntrinsics_{std::move(camIntrinsics)},
       tgtPath_{std::move(tgtPath)},
       tgtRad_{tgtRad},
-      aimer_{aimerCfg},
+    targetLeadTime_{targetLeadTime},
       yawZeroDeg_{yawZeroDeg},
       pitchZeroDeg_{pitchZeroDeg},
       yawSign_{yawSign},
@@ -61,9 +61,8 @@ bool TargetBuilder::IsConfigured() const
            IsFinite(tgtPath_.pathRad.value()) &&
            tgtPath_.pathRad > units::meter_t{0.0} &&
            IsFinite(tgtRad_.value()) && tgtRad_ > units::meter_t{0.0} &&
-           IsFinite(aimer_.GetConfig().projectileSpeed.value()) &&
-           aimer_.GetConfig().projectileSpeed >
-               units::meters_per_second_t{0.0} &&
+           IsFinite(targetLeadTime_.value()) &&
+           targetLeadTime_ > units::second_t{0.0} &&
            IsFinite(yawZeroDeg_) && IsFinite(pitchZeroDeg_) &&
            IsFinite(yawSign_) && IsFinite(pitchSign_) &&
            std::abs(yawSign_) == 1.0 && std::abs(pitchSign_) == 1.0 &&
@@ -259,19 +258,39 @@ std::optional<TargetEstimate> TargetBuilder::EstimateTarget(
         units::meters_per_second_t{tgtVelInBase.Z().value()}};
 
     const auto tgtPosFromMuzzle = tgtPosInBase - muzzlePose.Translation();
-    const auto aim = aimer_.Calculate(tgtPosFromMuzzle, tgtVel);
-    if (!aim)
-    {
-        return std::nullopt;
-    }
+    const turret_kinematics::Translation3d predictedTargetFromMuzzle{
+        tgtPosFromMuzzle.X().value() +
+            tgtVel[0].value() * targetLeadTime_.value(),
+        tgtPosFromMuzzle.Y().value() +
+            tgtVel[1].value() * targetLeadTime_.value(),
+        tgtPosFromMuzzle.Z().value() +
+            tgtVel[2].value() * targetLeadTime_.value()};
+    const units::radian_t bearingYaw{
+        std::atan2(tgtPosFromMuzzle.Y().value(),
+                   tgtPosFromMuzzle.X().value())};
+    const units::radian_t bearingPitch{
+        std::atan2(tgtPosFromMuzzle.Z().value(),
+                   std::hypot(tgtPosFromMuzzle.X().value(),
+                              tgtPosFromMuzzle.Y().value()))};
+    const units::radian_t leadYaw{
+        std::atan2(predictedTargetFromMuzzle.Y().value(),
+                   predictedTargetFromMuzzle.X().value())};
+    const units::radian_t leadPitch{
+        std::atan2(predictedTargetFromMuzzle.Z().value(),
+                   std::hypot(predictedTargetFromMuzzle.X().value(),
+                              predictedTargetFromMuzzle.Y().value()))};
 
     return TargetEstimate{
         tgtPosInBase,
         pathAngle,
         reprojErrPx,
         units::radian_t{yawZeroDeg_ / kRadToDeg +
-                        yawSign_ * aim->angles.yawRadians.value()},
+                        yawSign_ * bearingYaw.value()},
         units::radian_t{pitchZeroDeg_ / kRadToDeg +
-                        pitchSign_ * aim->angles.pitchRadians.value()},
-        aim->flightTime};
+                        pitchSign_ * bearingPitch.value()},
+        units::radian_t{yawZeroDeg_ / kRadToDeg +
+                        yawSign_ * leadYaw.value()},
+        units::radian_t{pitchZeroDeg_ / kRadToDeg +
+                        pitchSign_ * leadPitch.value()},
+        targetLeadTime_};
 }

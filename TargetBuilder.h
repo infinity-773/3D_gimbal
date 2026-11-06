@@ -35,6 +35,8 @@ struct TargetEstimate
     turret_kinematics::Translation3d posInBase;
     units::radian_t pathAngle{0.0};
     double reprojErrPx = 0.0;
+    units::radian_t yawBearingTarget{0.0};
+    units::radian_t pitchBearingTarget{0.0};
     units::radian_t yawTarget{0.0};
     units::radian_t pitchTarget{0.0};
     units::second_t flightTime{0.0};
@@ -46,7 +48,7 @@ public:
     TargetBuilder(CameraIntrinsics camIntrinsics,
                   CircularTargetPath tgtPath,
                   units::meter_t tgtRad,
-                  turret_kinematics::Aimer::Config aimerCfg,
+                  units::second_t targetLeadTime,
                   double yawZeroDeg,
                   double pitchZeroDeg,
                   double yawSign,
@@ -58,7 +60,7 @@ public:
                   // Fixed angular speed magnitude in rad/s; zero estimates it from frames.
                   double targetAngularSpeedRadPerSec = 0.0);
 
-    bool IsConfigured() const;
+                  bool IsConfigured() const;
 
     // The box is assumed to enclose a circle; both poses are expressed in the base frame.
     std::optional<TargetEstimate> EstimateTarget(
@@ -71,7 +73,7 @@ private:
     CameraIntrinsics camIntrinsics_;
     CircularTargetPath tgtPath_;
     units::meter_t tgtRad_;
-    turret_kinematics::Aimer aimer_;
+    units::second_t targetLeadTime_;
     double yawZeroDeg_;
     double pitchZeroDeg_;
     double yawSign_;

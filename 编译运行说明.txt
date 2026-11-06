@@ -1,0 +1,32 @@
+3D_gimbal 编译运行说明（Linux）
+
+1) 安装依赖（Ubuntu / Debian）
+sudo apt update
+sudo apt install build-essential cmake libopencv-dev
+
+2) 在仓库根目录配置并编译
+cmake -S . -B build-local -DCMAKE_BUILD_TYPE=Release
+cmake --build build-local --target vision_gimbal -j
+
+3) 运行主程序
+./build-local/vision_gimbal
+
+4) 运行前注意
+- 默认相机：cameraIndex = 0，分辨率 1280x720，fps = 30。
+- 默认串口开启：useSerial = true，serialPort = 1（/dev/ttyUSB_vision）。
+- 若未连接下位机，建议把 vision_gimbal.cpp 里的 useSerial 改为 false 后重新编译。
+- 轨迹圆心、半径和平面固定使用 vision_gimbal.cpp 中的 kPathCenterForwardM、kPathCenterLeftM、kPathCenterHeightM、kPathRadiusM 配置，不会在线拟合。
+- 若提示“3D aim waiting for feedback”，先检查下位机反馈；若 3D 位置不合理，请核对相机内参、目标尺寸和上述轨迹参数。
+- 瞄准关闭重力弹道补偿，按目标速度和固定 200 ms 提前量预测目标位置；可在 vision_gimbal.cpp 中调整 kTargetLeadTime。
+- 退出按键：Q 或 Esc。
+- 常用按键：D(调试图开关)、S(存图)、C(切换目标颜色)、F(开火开关)。
+
+5) 相机标定程序（独立工程）
+参考 camera_calibration/README.md
+
+在仓库根目录示例：
+cmake -S ./camera_calibration -B ./camera_calibration/build
+cmake --build ./camera_calibration/build --config Release
+
+说明：
+如果相机打不开，请检查 /dev/video0 是否存在，以及当前用户是否有设备访问权限。
