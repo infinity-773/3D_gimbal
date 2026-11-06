@@ -1,0 +1,6 @@
+/mnt/f/tromac_算法/算法赛题/vision/visiongimbal/build/CMakeFiles/vision_gimbal.dir
+/mnt/f/tromac_算法/算法赛题/vision/visiongimbal/build/CMakeFiles/edit_cache.dir
+/mnt/f/tromac_算法/算法赛题/vision/visiongimbal/build/CMakeFiles/rebuild_cache.dir
+/mnt/f/tromac_算法/算法赛题/vision/visiongimbal/build/Serial/CMakeFiles/tromac_serial.dir
+/mnt/f/tromac_算法/算法赛题/vision/visiongimbal/build/Serial/CMakeFiles/edit_cache.dir
+/mnt/f/tromac_算法/算法赛题/vision/visiongimbal/build/Serial/CMakeFiles/rebuild_cache.dir
