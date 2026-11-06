@@ -9,21 +9,27 @@
 namespace TRoMaC
 {
 
-constexpr uint8_t kFrameHeader0 = 0xA5;
-constexpr uint8_t kFrameHeader1 = 0x5A;
-constexpr uint8_t kVisionCommand = 0x01;
-constexpr uint8_t kFrameTail = 0x15;
-constexpr std::size_t kMaxRxPayloadSize = 32;
+constexpr uint8_t kFrameHeader = 0xA5;
+constexpr uint8_t kFrameTail = 0x5A;
+constexpr uint8_t kAbsoluteCommand = 0x01;
+constexpr uint8_t kIncrementalCommand = 0x02;
+constexpr uint8_t kVisionCommand = kAbsoluteCommand;
+constexpr uint8_t kControllerCommand = kIncrementalCommand;
+constexpr std::size_t kFeedbackPayloadSize = 12;
+constexpr std::size_t kFeedbackFrameSize = 15;
+constexpr std::size_t kCommandFrameSize = 17;
 
 #pragma pack(push, 1)
-// 下位机回传的云台绝对角度，顺序与 measure[2] 一致：yaw、pitch。
 struct GimbalFeedback
 {
-    float yaw_angle;
     float pitch_angle;
+    float yaw_angle;
+    uint16_t left_speed;
+    uint16_t right_speed;
 };
 
-// Command 0x01 payload. Floats are serialized as little-endian IEEE-754.
+// Gimbal_Ctrl: 1=absolute, 2=incremental. This is a semantic structure;
+// the wire frame is always serialized explicitly in Serial.cpp.
 struct VisionData
 {
     uint8_t Gimbal_Ctrl;
@@ -31,30 +37,25 @@ struct VisionData
     float yaw_angle;
     float pitch_delta_angle;
     float yaw_delta_angle;
-    uint8_t fric;
-    uint8_t Auto_Push;
+    uint16_t left_speed;
+    uint16_t right_speed;
+    uint8_t buzzer;
     uint8_t Push_flag;
 };
-
 #pragma pack(pop)
 
 static_assert(sizeof(float) == 4, "Protocol requires a 4-byte float");
-static_assert(sizeof(GimbalFeedback) == 8, "GimbalFeedback protocol size changed");
-static_assert(sizeof(VisionData) == 20, "VisionData protocol size changed");
+static_assert(sizeof(GimbalFeedback) == 12, "Feedback payload size changed");
+static_assert(sizeof(VisionData) == 23, "VisionData semantic layout changed");
 
 enum class RxParseState : uint8_t
 {
-    Header0,
-    Header1,
+    Header,
     Command,
-    Length,
     Data,
-    CrcLow,
-    CrcHigh,
     Tail
 };
 
-// Common receive-frame parser and raw payload storage.
 class RxBase
 {
 public:
@@ -66,7 +67,7 @@ public:
     bool ready() const noexcept;
     uint8_t command() const noexcept;
     std::size_t payloadSize() const noexcept;
-    const std::array<uint8_t, kMaxRxPayloadSize>& payload() const noexcept;
+    const std::array<uint8_t, kFeedbackPayloadSize>& payload() const noexcept;
     void clear() noexcept;
 
 private:
@@ -74,41 +75,22 @@ private:
     bool finishFrame(uint8_t tailByte);
 
     RxParseState state_;
-    std::array<uint8_t, kMaxRxPayloadSize> payload_;
-    std::array<uint8_t, 4 + kMaxRxPayloadSize> crcBytes_;
+    std::array<uint8_t, kFeedbackPayloadSize> payload_;
     uint8_t command_;
-    uint8_t payloadSize_;
     std::size_t payloadIndex_;
-    uint8_t crcLow_;
-    uint8_t crcHigh_;
     bool ready_;
 };
 
-// Common transmit-frame construction: header, length, CRC and tail.
-class TxBase
-{
-public:
-    const uint8_t* bytes() const noexcept;
-    std::size_t size() const noexcept;
-
-protected:
-    TxBase() noexcept;
-    void begin(uint8_t command, std::size_t payloadSize) noexcept;
-    uint8_t* payload() noexcept;
-    void finish() noexcept;
-    bool writeTo(int fd) const noexcept;
-
-private:
-    std::array<uint8_t, 4 + kMaxRxPayloadSize + 3> bytes_;
-    std::size_t size_;
-};
-
-class TxCommand01 final : private TxBase
+class TxCommand01
 {
 public:
     explicit TxCommand01(const VisionData& data) noexcept;
-    std::size_t size() const noexcept;
+    const uint8_t* bytes() const noexcept { return bytes_.data(); }
+    std::size_t size() const noexcept { return bytes_.size(); }
     bool writeTo(int fd) const noexcept;
+
+private:
+    std::array<uint8_t, kCommandFrameSize> bytes_{};
 };
 
 class Uart
@@ -131,7 +113,6 @@ public:
     bool Open(int comport, int speed);
     bool checkSerial();
     bool ReadData();
-
     bool send(const VisionData& data);
     bool ProtocolParse(uint8_t byte);
 

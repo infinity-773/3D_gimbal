@@ -1,12 +1,10 @@
 #ifndef SUPER_STRUCTURE_H_
 #define SUPER_STRUCTURE_H_
 
-#include "PIDController.h"
-#include "MathUtils.h"
 #include "Serial.h"
-#include "TargetContainer.h"
 
 #include <cmath>
+#include <optional>
 
 struct axisData
 {
@@ -18,64 +16,20 @@ struct axisData
     {}
 };
 
-enum class ControlOutputMode
-{
-    Position,
-    Incremental
-};
-
 struct SuperStructureConfig
 {
-    double zeroYaw;
-    double zeroPitch;
-    double aimU;
-    double aimV;
-    double focalLengthPx;
-    double yawSign;
-    double pitchSign;
-    double yawBias;
-    double pitchBias;
-    double deadbandPx;
-    double aimTolerancePx;
-    double integralEnableOffsetPx;
-    int stayTimeMs;
-    PIDConfig yawPid;
-    PIDConfig pitchPid;
-
-    SuperStructureConfig()
-        : zeroYaw(0.0),
-          zeroPitch(-3.0),
-          aimU(640.0),
-          aimV(360.0),
-          focalLengthPx(1300.0),
-          yawSign(1.0),
-          pitchSign(1.0),
-          yawBias(0.0),
-          pitchBias(0.0),
-          deadbandPx(2.0),
-          aimTolerancePx(10.0),
-          integralEnableOffsetPx(40.0),
-          stayTimeMs(1000),
-          yawPid(),
-          pitchPid()
-    {}
+    double zeroYawDeg = 0.0;
+    double zeroPitchDeg = 0.0;
+    double aimToleranceDeg = 0.6;
+    int stayTimeMs = 1000;
+    bool zeroOnLost = false;
 };
 
 struct OutputData
 {
     axisData axis;
-    axisData targetOffsetPx;
-    axisData targetAngleError;
-    bool fire;
-    ControlOutputMode mode;
-
-    OutputData()
-        : axis(),
-          targetOffsetPx(),
-          targetAngleError(),
-          fire(false),
-          mode(ControlOutputMode::Position)
-    {}
+    axisData aimErrorDeg;
+    bool aimValid = false;
 };
 
 enum class State
@@ -90,160 +44,118 @@ enum class State
 class SuperStructure
 {
 public:
-    explicit SuperStructure(
-        const SuperStructureConfig& config = SuperStructureConfig(),
-        ControlOutputMode outputMode = ControlOutputMode::Position)
-        : config_(config),
-          yawController_(config.yawPid),
-          pitchController_(config.pitchPid),
-          state_(State::zeroed),
-          outputMode_(outputMode),
-          targetLostAt_(0),
-          feedbackValid_(false),
-          incrementalBiasPending_(false)
+    explicit SuperStructure(const SuperStructureConfig& cfg = {})
+        : cfg_{cfg}
     {
-        output_.mode = outputMode_;
-        output_.axis = axisData(config_.zeroYaw, config_.zeroPitch);
+        output_.axis = axisData(cfg_.zeroYawDeg, cfg_.zeroPitchDeg);
     }
 
-    void updateBoxes(const BoxContainer& boxes)
+    void setAimTarget(const std::optional<axisData>& aimTargetDeg)
     {
-        boxes_ = boxes;
-    }
-
-    void setOutputMode(ControlOutputMode outputMode)
-    {
-        if (outputMode_ != outputMode)
+        if (aimTargetDeg &&
+            (!std::isfinite(aimTargetDeg->yaw) ||
+             !std::isfinite(aimTargetDeg->pitch)))
         {
-            outputMode_ = outputMode;
-            resetControllers();
-            incrementalBiasPending_ =
-                outputMode_ == ControlOutputMode::Incremental &&
-                (state_ == State::aiming || state_ == State::aimed);
+            aimTargetDeg_.reset();
+            return;
         }
+        aimTargetDeg_ = aimTargetDeg;
     }
 
     void periodic(const TRoMaC::GimbalFeedback& feedback,
                   int now,
-                  double dtSeconds,
                   bool feedbackValid = true)
     {
-        //更新反馈数值
         feedbackValid_ = feedbackValid &&
-            std::isfinite(feedback.yaw_angle) && std::isfinite(feedback.pitch_angle);
+            std::isfinite(feedback.yaw_angle) &&
+            std::isfinite(feedback.pitch_angle);
         if (feedbackValid_)
         {
-            feedbackData_ = axisData(feedback.yaw_angle, feedback.pitch_angle);
+            feedbackDeg_ = axisData(feedback.yaw_angle, feedback.pitch_angle);
         }
-        //获取目标像素点
-        const bool targetValid = boxes_.size() == 1;
-        const cv::Point2d target = targetValid ? boxes_.getCenter(0) : cv::Point2d();
-        updateTargetErrors(targetValid, target);
+
+        const bool tgtValid = aimTargetDeg_.has_value();
+        output_.aimValid = tgtValid && feedbackValid_;
+        output_.aimErrorDeg = output_.aimValid
+            ? axisData(aimTargetDeg_->yaw - feedbackDeg_.yaw,
+                       aimTargetDeg_->pitch - feedbackDeg_.pitch)
+            : axisData();
 
         switch (state_)
         {
-        case State::aiming: //定义：有目标且未对准
-            if (!targetValid)
+        case State::aiming:
+            if (!tgtValid)
             {
                 state_ = State::lost;
-                targetLostAt_ = now;
-                resetControllers();
-                incrementalBiasPending_ = false;
+                tgtLostAt_ = now;
             }
-            else if (feedbackValid_ && isWithinAimTolerance(target))
+            else if (output_.aimValid && isWithinAimTolerance())
             {
                 state_ = State::aimed;
             }
             break;
 
-        case State::aimed: //定义：有目标且已对准
-            if (!targetValid)
+        case State::aimed:
+            if (!tgtValid)
             {
                 state_ = State::lost;
-                targetLostAt_ = now;
-                incrementalBiasPending_ = false;
+                tgtLostAt_ = now;
             }
-            else if (feedbackValid_ && !isWithinAimTolerance(target))
+            else if (!output_.aimValid || !isWithinAimTolerance())
             {
                 state_ = State::aiming;
-                resetControllers();
             }
             break;
 
-        case State::zeroed: //定义：无目标且已回正
-            if (targetValid)
+        case State::zeroed:
+            if (tgtValid)
             {
-                enterAiming();
+                state_ = State::aiming;
             }
             break;
 
-        case State::zeroing:   //定义：无目标且未回正
-            if (targetValid)
+        case State::zeroing:
+            if (tgtValid)
             {
-                enterAiming();
+                state_ = State::aiming;
             }
             else if (feedbackValid_ &&
-                     std::fabs(feedbackData_.yaw - config_.zeroYaw) < 0.5 &&
-                     std::fabs(feedbackData_.pitch - config_.zeroPitch) < 0.5)
+                     std::fabs(feedbackDeg_.yaw - cfg_.zeroYawDeg) <=
+                         cfg_.aimToleranceDeg &&
+                     std::fabs(feedbackDeg_.pitch - cfg_.zeroPitchDeg) <=
+                         cfg_.aimToleranceDeg)
             {
                 state_ = State::zeroed;
-                resetControllers();
             }
             break;
 
-        case State::lost://定义：无目标，等待一段事件后回正
-            if (targetValid)
+        case State::lost:
+            if (tgtValid)
             {
-                enterAiming();
+                state_ = State::aiming;
             }
-            else if (now - targetLostAt_ > config_.stayTimeMs)
+            else if (cfg_.zeroOnLost && now - tgtLostAt_ > cfg_.stayTimeMs)
             {
                 state_ = State::zeroing;
-                resetControllers();
             }
             break;
         }
 
-        output_.fire = false;
-        output_.mode = outputMode_;
-        if (!feedbackValid_)
+        if (state_ == State::aiming || state_ == State::aimed)
         {
-            output_.axis = axisData();
-            resetControllers();
-            return;
+            output_.axis = feedbackValid_ && tgtValid
+                ? *aimTargetDeg_
+                : feedbackDeg_;
         }
-
-        if ((state_ == State::aiming || state_ == State::aimed) && targetValid)
+        else if (state_ == State::zeroing || state_ == State::zeroed)
         {
-            output_.axis = getTrackingOutput(dtSeconds);
-        }
-        else if (state_ == State::zeroing)
-        {
-            if (outputMode_ == ControlOutputMode::Position)
-            {
-                output_.axis = axisData(config_.zeroYaw, config_.zeroPitch);
-            }
-            else
-            {
-                output_.axis = axisData(
-                    yawController_.update(config_.zeroYaw - feedbackData_.yaw,
-                                          dtSeconds, PIDMode::Incremental),
-                    pitchController_.update(config_.zeroPitch - feedbackData_.pitch,
-                                            dtSeconds, PIDMode::Incremental));
-            }
-        }
-        else if (state_ == State::zeroed &&
-                 outputMode_ == ControlOutputMode::Position)
-        {
-            output_.axis = axisData(config_.zeroYaw, config_.zeroPitch);
-        }
-        else if (outputMode_ == ControlOutputMode::Position)
-        {
-            output_.axis = feedbackData_;
+            output_.axis = feedbackValid_
+                ? axisData(cfg_.zeroYawDeg, cfg_.zeroPitchDeg)
+                : feedbackDeg_;
         }
         else
         {
-            output_.axis = axisData();
+            output_.axis = feedbackDeg_;
         }
     }
 
@@ -267,118 +179,25 @@ public:
 
     bool isAimed() const
     {
-        return state_ == State::aimed && boxes_.size() == 1 && feedbackValid_;
+        return state_ == State::aimed && output_.aimValid;
     }
 
 private:
-    SuperStructureConfig config_;
-    PIDController yawController_;
-    PIDController pitchController_;
-    State state_;
-    ControlOutputMode outputMode_;
+    SuperStructureConfig cfg_;
+    State state_ = State::lost;
     OutputData output_;
-    axisData feedbackData_;
-    int targetLostAt_;
-    bool feedbackValid_;
-    bool incrementalBiasPending_;
-    BoxContainer boxes_;
+    axisData feedbackDeg_;
+    std::optional<axisData> aimTargetDeg_;
+    int tgtLostAt_ = 0;
+    bool feedbackValid_ = false;
 
-    void resetControllers()
+    bool isWithinAimTolerance() const
     {
-        yawController_.reset();
-        pitchController_.reset();
+        const double yawErr = std::remainder(output_.aimErrorDeg.yaw, 360.0);
+        const double pitchErr = std::remainder(output_.aimErrorDeg.pitch, 360.0);
+        return std::fabs(yawErr) <= cfg_.aimToleranceDeg &&
+               std::fabs(pitchErr) <= cfg_.aimToleranceDeg;
     }
-
-    void enterAiming()
-    {
-        state_ = State::aiming;
-        resetControllers();
-        incrementalBiasPending_ = outputMode_ == ControlOutputMode::Incremental;
-    }
-
-    void updateTargetErrors(bool targetValid, const cv::Point2d& target)
-    {
-        if (!targetValid)
-        {
-            output_.targetOffsetPx = axisData();
-            output_.targetAngleError = axisData();
-            return;
-        }
-
-        output_.targetOffsetPx = axisData(
-            target.x - config_.aimU,
-            target.y - config_.aimV);
-        output_.targetAngleError = axisData(
-            pixelToAngle(output_.targetOffsetPx.yaw, config_.focalLengthPx) *
-                config_.yawSign,
-            -pixelToAngle(output_.targetOffsetPx.pitch, config_.focalLengthPx) *
-                config_.pitchSign);
-    }
-
-    double yawTargetError() const
-    {
-        return -output_.targetAngleError.yaw;
-    }
-
-    double pitchTargetError() const
-    {
-        return -output_.targetAngleError.pitch;
-    }
-
-    bool isWithinAimTolerance(const cv::Point2d& target) const
-    {
-        return std::fabs(target.x - config_.aimU) <= config_.aimTolerancePx &&
-               std::fabs(target.y - config_.aimV) <= config_.aimTolerancePx;
-    }
-
-    axisData getTrackingOutput(double dtSeconds)
-    {
-        const PIDMode pidMode = outputMode_ == ControlOutputMode::Position
-            ? PIDMode::Position
-            : PIDMode::Incremental;
-        const double yawPixelError = output_.targetOffsetPx.yaw;
-        const double pitchPixelError = output_.targetOffsetPx.pitch;
-        const bool integralEnabled =
-            std::hypot(yawPixelError, pitchPixelError) <=
-            config_.integralEnableOffsetPx;
-        double yawCorrection = 0.0;
-        if (std::fabs(yawPixelError) <= config_.deadbandPx)
-        {
-            yawController_.reset();
-        }
-        else
-        {
-            yawCorrection = yawController_.update(
-                yawTargetError(), dtSeconds, pidMode, integralEnabled);
-        }
-
-        double pitchCorrection = 0.0;
-        if (std::fabs(pitchPixelError) <= config_.deadbandPx)
-        {
-            pitchController_.reset();
-        }
-        else
-        {
-            pitchCorrection = pitchController_.update(
-                pitchTargetError(), dtSeconds, pidMode, integralEnabled);
-        }
-
-        if (outputMode_ == ControlOutputMode::Position)
-        {
-            return axisData(feedbackData_.yaw + yawCorrection + config_.yawBias,
-                            feedbackData_.pitch + pitchCorrection + config_.pitchBias);
-        }
-
-        if (incrementalBiasPending_)
-        {
-            // Incremental commands accumulate at the actuator, so apply the fixed offset once.
-            yawCorrection += config_.yawBias;
-            pitchCorrection += config_.pitchBias;
-            incrementalBiasPending_ = false;
-        }
-        return axisData(yawCorrection, pitchCorrection);
-    }
-
 };
 
 #endif // SUPER_STRUCTURE_H_
