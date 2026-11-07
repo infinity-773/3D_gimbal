@@ -112,7 +112,7 @@ int main() {
                           camera.K, camera.D, pixels);
         VisionFrame frame{time, pixels, {}, true};
         OnVisionFrame(frame, camera, {}, integrated, accumulated, accumulated_times, residual_time);
-        if (index < 25) assert(integrated.Lock() == LockState::IDLE);
+        if (index < 13) assert(integrated.Lock() == LockState::IDLE);
     }
     assert(integrated.Lock() == LockState::LOCKED);
     assert((integrated.geom.center - actual.center).Norm().value() < 0.002);
@@ -126,7 +126,7 @@ int main() {
     const double initial_center_error = (integrated.geom.center - actual.center).Norm().value();
     const double initial_radius_error = std::abs(integrated.geom.radius - actual.radius);
     const double refinement_start = integrated.state.last_obs_time;
-    for (int index = 1; index <= 150; ++index) {
+    for (int index = 1; index <= 45; ++index) {
         const double time = refinement_start + index * 0.04;
         const auto point = actual.Predict(direction * (3.0 + 1.2 * (time - 100.0)));
         std::vector<cv::Point2f> pixels;
@@ -158,6 +158,31 @@ int main() {
     assert(integrated.Lock() == LockState::IDLE && commands == 1);
     SetServoCallback({});
     }
+
+    TargetModel slow;
+    slow.LoadKnownGeometry({0.12, -0.08, 2.0}, 0.2, {0.0, 0.0, 1.0});
+    TargetGeometry slow_actual;
+    slow_actual.center = {0.0, 0.0, 2.0};
+    slow_actual.radius = 0.3;
+    slow_actual.normal = {0.0, 0.0, 1.0};
+    slow_actual.valid = true;
+    slow_actual.BuildBasis();
+    std::vector<frc::Translation3d> slow_points;
+    std::vector<double> slow_times;
+    double slow_residual = 0.0;
+    for (int index = 0; index <= 20 && slow.Lock() == LockState::IDLE; ++index) {
+        const double time = 100.0 + index * 0.04;
+        const auto point = slow_actual.Predict(0.4 + std::numbers::pi / 5.0 * (time - 100.0));
+        std::vector<cv::Point2f> pixels;
+        cv::projectPoints(object, cv::Vec3d{},
+                          cv::Vec3d{point.X().value(), point.Y().value(), point.Z().value()},
+                          camera.K, camera.D, pixels);
+        OnVisionFrame({time, pixels, {}, true}, camera, {}, slow, slow_points, slow_times, slow_residual);
+    }
+    assert(slow.Lock() == LockState::LOCKED);
+    assert(slow.state.last_obs_time - 100.0 <= 0.8);
+    assert(slow.phase.direction == 1);
+    assert((slow.geom.center - slow_actual.center).Norm().value() < 0.01);
 
     TargetModel stationary;
     stationary.LoadKnownGeometry({0.0, 0.0, 2.0}, 0.3, {0.0, 0.0, 1.0});

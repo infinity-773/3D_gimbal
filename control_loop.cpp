@@ -9,12 +9,13 @@
 
 namespace {
 ServoCallback servo_callback;
-constexpr std::size_t kFitMinFrames = 20;
-constexpr double kFitMinDuration = 1.0;
-constexpr double kFitMinTravel = 45.0 * std::numbers::pi / 180.0;
+constexpr std::size_t kFitMinFrames = 12;
+constexpr double kFitMinDuration = 0.5;
+constexpr double kFitMinTravel = 10.0 * std::numbers::pi / 180.0;
 constexpr double kFitWindow = 10.0;
-constexpr double kGeomMaxCenterStep = 0.005;
-constexpr double kGeomMaxRadiusStep = 0.005;
+constexpr double kGeomUpdateInterval = 0.5;
+constexpr double kGeomMaxCenterStep = 0.02;
+constexpr double kGeomMaxRadiusStep = 0.02;
 
 bool IsFitUsable(const FitResult& fit, const std::vector<frc::Translation3d>& points,
                  const std::vector<double>& times) {
@@ -134,7 +135,7 @@ void OnVisionFrame(const VisionFrame& vf, const CameraConfig& cam,
     }
     const double elapsed = vf.t - previous_time;
     if (elapsed > 0.0 && elapsed <= 0.1) geom_residual_accum_time += elapsed;
-    if (geom_residual_accum_time >= 1.0 && pts_base_accum.size() >= kFitMinFrames &&
+    if (geom_residual_accum_time >= kGeomUpdateInterval && pts_base_accum.size() >= kFitMinFrames &&
         times_accum.back() - times_accum.front() >= kFitMinDuration) {
         const auto fit = FitWithPlane(pts_base_accum, times_accum, model.phase.OmegaAt(vf.t), model.geom);
         if (fit && IsFitUsable(*fit, pts_base_accum, times_accum)) {
