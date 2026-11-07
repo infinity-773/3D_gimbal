@@ -72,9 +72,9 @@ GeomRefine RefineGeometryStep(const TargetGeometry& cur,
     return result;
 }
 
-std::optional<FitResult> FitAll(const std::vector<frc::Translation3d>& pts_base,
-                                const std::vector<double>& times,
-                                double omega_hint) {
+static std::optional<FitResult> FitCircle(const std::vector<frc::Translation3d>& pts_base,
+                                         const std::vector<double>& times,
+                                         double omega_hint, const TargetGeometry* prior) {
     const std::size_t count = pts_base.size();
     if (count < 8 || times.size() != count || !std::isfinite(omega_hint)) return std::nullopt;
     frc::Translation3d mean;
@@ -94,12 +94,18 @@ std::optional<FitResult> FitAll(const std::vector<frc::Translation3d>& pts_base,
             for (int col = 0; col < 3; ++col)
                 cov.at<double>(row, col) += values[row] * values[col] / static_cast<double>(count);
     }
+    FitResult result;
     cv::SVD plane(cov, cv::SVD::FULL_UV);
     if (plane.w.at<double>(1) < 1e-12) return std::nullopt;
-    FitResult result;
-    result.geom.normal = frc::Translation3d{plane.vt.at<double>(2, 0),
-                                            plane.vt.at<double>(2, 1),
-                                            plane.vt.at<double>(2, 2)};
+    if (prior) {
+        if (!prior->valid || prior->normal.Norm().value() < 1e-12) return std::nullopt;
+        result.geom.normal = prior->normal;
+        result.geom.source = GeomSource::REFINED;
+    } else {
+        result.geom.normal = frc::Translation3d{plane.vt.at<double>(2, 0),
+                                                plane.vt.at<double>(2, 1),
+                                                plane.vt.at<double>(2, 2)};
+    }
     result.geom.BuildBasis();
     cv::Mat matrix(static_cast<int>(count), 3, CV_64F);
     cv::Mat rhs(static_cast<int>(count), 1, CV_64F);
@@ -148,4 +154,15 @@ std::optional<FitResult> FitAll(const std::vector<frc::Translation3d>& pts_base,
     result.rms_deg = std::sqrt(squared_error / static_cast<double>(count)) * 180.0 / std::numbers::pi;
     result.phi_target_offset = TargetModel::WrapPi(phases.front() - result.phase.PhaseAt(times.front()));
     return result;
+}
+
+std::optional<FitResult> FitAll(const std::vector<frc::Translation3d>& pts_base,
+                                const std::vector<double>& times, double omega_hint) {
+    return FitCircle(pts_base, times, omega_hint, nullptr);
+}
+
+std::optional<FitResult> FitWithPlane(const std::vector<frc::Translation3d>& pts_base,
+                                      const std::vector<double>& times, double omega_hint,
+                                      const TargetGeometry& prior) {
+    return FitCircle(pts_base, times, omega_hint, &prior);
 }

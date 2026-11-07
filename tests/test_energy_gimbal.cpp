@@ -92,29 +92,71 @@ int main() {
     const std::vector<cv::Point3f> object{{0, -0.06F, 0}, {0.06F, 0, 0}, {0, 0.06F, 0}, {-0.06F, 0, 0}};
     for (int direction : {-1, 1}) {
     TargetModel integrated;
-    integrated.LoadKnownGeometry({0.0, 0.0, 2.0}, 0.3, {0.0, 0.0, 1.0});
+    integrated.LoadKnownGeometry({0.12, -0.08, 2.0}, 0.2, {0.0, 0.0, 1.0});
+    TargetGeometry actual;
+    actual.center = {0.0, 0.0, 2.0};
+    actual.radius = 0.3;
+    actual.normal = {0.0, 0.0, 1.0};
+    actual.valid = true;
+    actual.BuildBasis();
     integrated.phase.direction = -direction;
     std::vector<frc::Translation3d> accumulated;
     std::vector<double> accumulated_times;
     double residual_time = 0.0;
     for (int index = 0; index < 40 && integrated.Lock() == LockState::IDLE; ++index) {
         const double time = 100.0 + index * 0.04;
-        const auto point = integrated.geom.Predict(direction * (3.0 + 1.2 * (time - 100.0)));
+        const auto point = actual.Predict(direction * (3.0 + 1.2 * (time - 100.0)));
         std::vector<cv::Point2f> pixels;
         cv::projectPoints(object, cv::Vec3d{0.0, 0.0, 0.0},
                           cv::Vec3d{point.X().value(), point.Y().value(), point.Z().value()},
                           camera.K, camera.D, pixels);
         VisionFrame frame{time, pixels, {}, true};
         OnVisionFrame(frame, camera, {}, integrated, accumulated, accumulated_times, residual_time);
-        if (index < 13) assert(integrated.Lock() == LockState::IDLE);
+        if (index < 25) assert(integrated.Lock() == LockState::IDLE);
     }
     assert(integrated.Lock() == LockState::LOCKED);
+    assert((integrated.geom.center - actual.center).Norm().value() < 0.002);
+    assert(std::abs(integrated.geom.radius - actual.radius) < 0.002);
     assert(integrated.phase.direction == direction);
     assert(std::abs(integrated.phase.omega - 1.2) < 0.01);
     assert(integrated.state.last_obs_time > 100.0);
     assert(accumulated.empty() && accumulated_times.empty());
-    integrated.Tick(integrated.state.last_obs_time + 0.01, 0.01);
+    actual.center = actual.center + frc::Translation3d{0.03, 0.0, 0.0};
+    actual.radius = 0.32;
+    const double initial_center_error = (integrated.geom.center - actual.center).Norm().value();
+    const double initial_radius_error = std::abs(integrated.geom.radius - actual.radius);
+    const double refinement_start = integrated.state.last_obs_time;
+    for (int index = 1; index <= 150; ++index) {
+        const double time = refinement_start + index * 0.04;
+        const auto point = actual.Predict(direction * (3.0 + 1.2 * (time - 100.0)));
+        std::vector<cv::Point2f> pixels;
+        cv::projectPoints(object, cv::Vec3d{},
+                          cv::Vec3d{point.X().value(), point.Y().value(), point.Z().value()},
+                          camera.K, camera.D, pixels);
+        VisionFrame frame{time, pixels, {}, true};
+        OnVisionFrame(frame, camera, {}, integrated, accumulated, accumulated_times, residual_time);
+        integrated.Tick(time, 0.04);
+    }
     assert(integrated.Lock() == LockState::LOCKED);
+    assert((integrated.geom.center - actual.center).Norm().value() < initial_center_error - 0.01);
+    assert(std::abs(integrated.geom.radius - actual.radius) < initial_radius_error - 0.01);
+    int commands = 0;
+    double yaw = 0.0, pitch = 0.0;
+    SetServoCallback([&](double yaw_command, double pitch_command) {
+        ++commands;
+        yaw = yaw_command;
+        pitch = pitch_command;
+    });
+    const double control_time = integrated.state.last_obs_time + 0.01;
+    ControlTick(control_time, 0.01, integrated, {});
+    assert(integrated.Lock() == LockState::LOCKED);
+    const auto aim = integrated.Predict(control_time);
+    assert(commands == 1);
+    assert(std::abs(yaw - std::atan2(aim.Y().value(), aim.X().value())) < 1e-12);
+    assert(std::abs(pitch - std::atan2(aim.Z().value(), std::hypot(aim.X().value(), aim.Y().value()))) < 1e-12);
+    ControlTick(integrated.state.last_obs_time + 1.01, 0.01, integrated, {});
+    assert(integrated.Lock() == LockState::IDLE && commands == 1);
+    SetServoCallback({});
     }
 
     TargetModel stationary;

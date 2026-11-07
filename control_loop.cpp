@@ -9,14 +9,32 @@
 
 namespace {
 ServoCallback servo_callback;
-constexpr std::size_t kPhaseMinFrames = 8;
-constexpr double kPhaseMinDuration = 0.5;
-constexpr double kPhaseMinTravel = 5.0 * std::numbers::pi / 180.0;
-constexpr double kPhaseWindow = 3.0;
-constexpr double kGeomCenterGain = 0.2;
-constexpr double kGeomRadiusGain = 0.2;
+constexpr std::size_t kFitMinFrames = 20;
+constexpr double kFitMinDuration = 1.0;
+constexpr double kFitMinTravel = 45.0 * std::numbers::pi / 180.0;
+constexpr double kFitWindow = 10.0;
 constexpr double kGeomMaxCenterStep = 0.005;
 constexpr double kGeomMaxRadiusStep = 0.005;
+
+bool IsFitUsable(const FitResult& fit, const std::vector<frc::Translation3d>& points,
+                 const std::vector<double>& times) {
+    if (!fit.geom.valid || !std::isfinite(fit.geom.radius) || fit.geom.radius <= 0.0 ||
+        fit.rms_deg >= 1.5 || fit.phase.omega <= 0.05 || fit.phase.omega >= 10.0 ||
+        fit.phase.omega * (times.back() - times.front()) < kFitMinTravel) return false;
+    double radial_error_squared = 0.0;
+    double plane_error_squared = 0.0;
+    for (const auto& point : points) {
+        const auto delta = point - fit.geom.center;
+        const double x = delta.Dot(fit.geom.u).value();
+        const double y = delta.Dot(fit.geom.v).value();
+        const double radial_error = std::hypot(x, y) - fit.geom.radius;
+        const double plane_error = delta.Dot(fit.geom.normal).value();
+        radial_error_squared += radial_error * radial_error;
+        plane_error_squared += plane_error * plane_error;
+    }
+    return std::sqrt(radial_error_squared / points.size()) <= 0.02 &&
+           std::sqrt(plane_error_squared / points.size()) <= 0.05;
+}
 }
 
 FireController::FireController(double shot_interval, double pulse_duration)
@@ -70,33 +88,24 @@ void OnVisionFrame(const VisionFrame& vf, const CameraConfig& cam,
     representative = representative / 4.0;
     if (model.Lock() == LockState::IDLE) {
         if (pts_base_accum.size() != times_accum.size() ||
-            (!times_accum.empty() && (vf.t <= times_accum.back() || vf.t - times_accum.front() > 5.0))) {
+            (!times_accum.empty() && vf.t <= times_accum.back())) {
             pts_base_accum.clear();
             times_accum.clear();
         }
         pts_base_accum.push_back(representative);
         times_accum.push_back(vf.t);
-        while (model.geom.valid && times_accum.size() > kPhaseMinFrames &&
-               vf.t - times_accum.front() > kPhaseWindow) {
+        while (times_accum.size() > kFitMinFrames && vf.t - times_accum.front() > kFitWindow) {
             pts_base_accum.erase(pts_base_accum.begin());
             times_accum.erase(times_accum.begin());
         }
-        if (model.geom.valid && pts_base_accum.size() >= kPhaseMinFrames &&
-            times_accum.back() - times_accum.front() >= kPhaseMinDuration) {
-            std::vector<double> phases;
-            for (const auto& point : pts_base_accum) {
-                const auto delta = point - model.geom.center;
-                phases.push_back(std::atan2(delta.Dot(model.geom.v).value(), delta.Dot(model.geom.u).value()));
+        if (pts_base_accum.size() >= kFitMinFrames &&
+            times_accum.back() - times_accum.front() >= kFitMinDuration) {
+            const auto fit = model.geom.valid
+                ? FitWithPlane(pts_base_accum, times_accum, model.phase.OmegaAt(vf.t), model.geom)
+                : FitAll(pts_base_accum, times_accum, model.phase.OmegaAt(vf.t));
+            if (fit && IsFitUsable(*fit, pts_base_accum, times_accum)) {
+                model.ApplyFit(fit->geom, fit->phase, fit->phi_target_offset);
             }
-            const auto fit = FitPhase(phases, times_accum, model.phase.OmegaAt(vf.t));
-            if (fit && fit->rms_deg < 1.5 && fit->omega > 0.05 && fit->omega < 10.0 &&
-                fit->omega * (times_accum.back() - times_accum.front()) >= kPhaseMinTravel) {
-                const PhaseModel phase{fit->phi_ref, fit->t_ref, fit->omega, fit->direction};
-                model.ApplyFit(model.geom, phase, TargetModel::WrapPi(phases.front() - phase.PhaseAt(times_accum.front())));
-            }
-        } else if (!model.geom.valid && pts_base_accum.size() >= 20) {
-            const auto fit = FitAll(pts_base_accum, times_accum, model.phase.OmegaAt(vf.t));
-            if (fit && fit->rms_deg < 1.5) model.ApplyFit(fit->geom, fit->phase, fit->phi_target_offset);
         }
         if (model.Lock() != LockState::LOCKED) return;
         model.state.last_obs_time = vf.t;
@@ -105,16 +114,37 @@ void OnVisionFrame(const VisionFrame& vf, const CameraConfig& cam,
         geom_residual_accum_time = 0.0;
         return;
     }
-    if (model.Lock() != LockState::LOCKED) return;
-    const auto delta = representative - model.geom.center;
-    const double residual = std::abs(delta.Norm().value() - model.geom.radius);
-    if (residual <= 0.02) { geom_residual_accum_time = 0.0; return; }
+    if (model.Lock() != LockState::LOCKED || model.state.switch_count != 0) {
+        pts_base_accum.clear();
+        times_accum.clear();
+        geom_residual_accum_time = 0.0;
+        return;
+    }
+    if (pts_base_accum.size() != times_accum.size() ||
+        (!times_accum.empty() && vf.t <= times_accum.back())) {
+        pts_base_accum.clear();
+        times_accum.clear();
+        geom_residual_accum_time = 0.0;
+    }
+    pts_base_accum.push_back(representative);
+    times_accum.push_back(vf.t);
+    while (times_accum.size() > kFitMinFrames && vf.t - times_accum.front() > kFitWindow) {
+        pts_base_accum.erase(pts_base_accum.begin());
+        times_accum.erase(times_accum.begin());
+    }
     const double elapsed = vf.t - previous_time;
     if (elapsed > 0.0 && elapsed <= 0.1) geom_residual_accum_time += elapsed;
-    if (geom_residual_accum_time > 1.0) {
-        const auto refined = RefineGeometryStep(model.geom, points, kGeomCenterGain, kGeomRadiusGain,
-                                                kGeomMaxCenterStep, kGeomMaxRadiusStep);
-        if (refined.valid) model.ApplyGeomRefine(refined.center, refined.radius);
+    if (geom_residual_accum_time >= 1.0 && pts_base_accum.size() >= kFitMinFrames &&
+        times_accum.back() - times_accum.front() >= kFitMinDuration) {
+        const auto fit = FitWithPlane(pts_base_accum, times_accum, model.phase.OmegaAt(vf.t), model.geom);
+        if (fit && IsFitUsable(*fit, pts_base_accum, times_accum)) {
+            auto shift = fit->geom.center - model.geom.center;
+            const double shift_norm = shift.Norm().value();
+            if (shift_norm > kGeomMaxCenterStep) shift = shift * (kGeomMaxCenterStep / shift_norm);
+            const double radius_shift = std::clamp(fit->geom.radius - model.geom.radius,
+                                                   -kGeomMaxRadiusStep, kGeomMaxRadiusStep);
+            model.ApplyGeomRefine(model.geom.center + shift, model.geom.radius + radius_shift);
+        }
         geom_residual_accum_time = 0.0;
     }
 }

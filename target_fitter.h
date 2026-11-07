@@ -29,6 +29,9 @@ std::optional<PhaseFit> FitPhase(const std::vector<double>& phi_obs,
 std::optional<FitResult> FitAll(const std::vector<frc::Translation3d>& pts_base,
                                 const std::vector<double>& times,
                                 double omega_hint);
+std::optional<FitResult> FitWithPlane(const std::vector<frc::Translation3d>& pts_base,
+                                      const std::vector<double>& times,
+                                      double omega_hint, const TargetGeometry& prior);
 GeomRefine RefineGeometryStep(const TargetGeometry& cur,
                               const std::vector<frc::Translation3d>& pts_base,
                               double k_center, double k_radius,

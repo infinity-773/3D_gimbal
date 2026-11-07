@@ -256,6 +256,8 @@ static void DrawTargetOverlay(cv::Mat& image, const TargetModel& model, double t
                               const frc::Transform3d& baseToCam, const CameraConfig& camera) {
     if (image.empty() || !model.geom.valid) return;
     constexpr int segments = 128;
+    const cv::Scalar pathColor = model.geom.source == GeomSource::KNOWN
+        ? cv::Scalar(128, 128, 128) : cv::Scalar(255, 255, 0);
     std::array<std::optional<cv::Point2d>, segments> path;
     for (int index = 0; index < segments; ++index) {
         const double phi = 2.0 * std::numbers::pi * index / segments;
@@ -268,7 +270,7 @@ static void DrawTargetOverlay(cv::Mat& image, const TargetModel& model, double t
         cv::Point from{cvRound(first->x), cvRound(first->y)};
         cv::Point to{cvRound(second->x), cvRound(second->y)};
         if (cv::clipLine(image.size(), from, to))
-            cv::line(image, from, to, cv::Scalar(255, 255, 0), 2, cv::LINE_AA);
+            cv::line(image, from, to, pathColor, 2, cv::LINE_AA);
     }
     const cv::Point center{image.cols / 2, image.rows / 2};
     cv::drawMarker(image, center, cv::Scalar(0, 255, 0), cv::MARKER_CROSS, 18, 2, cv::LINE_AA);
@@ -332,6 +334,9 @@ int main()
     std::vector<double> times;
     double residualTime = 0.0;
     bool commandReady = false;
+    TRoMaC::GimbalFeedback previousFeedback{};
+    std::chrono::steady_clock::time_point previousFeedbackAt{};
+    bool hasPreviousFeedback = false;
     FireController fireControl{kShotIntervalS, kPushPulseS};
     SetServoCallback([&](double yaw, double pitch) {
         constexpr double degrees = 180.0 / std::numbers::pi;
@@ -397,8 +402,22 @@ int main()
         /*---------需要编写：图像识别、控制计算和发送数据----------*/
         {
             std::lock_guard<std::mutex> lock(receiveMutex);
-            feedbackValid = feedbackValid && hasFeedback && receivedAt <= frameReceivedAt &&
-                receiveData.yaw_angle == feedback.yaw_angle && receiveData.pitch_angle == feedback.pitch_angle;
+            if (hasFeedback && receivedAt <= frameReceivedAt &&
+                frameReceivedAt - receivedAt < std::chrono::milliseconds(250)) {
+                feedback = receiveData;
+                feedbackValid = true;
+            } else if (hasPreviousFeedback && previousFeedbackAt <= frameReceivedAt &&
+                       frameReceivedAt - previousFeedbackAt < std::chrono::milliseconds(250)) {
+                feedback = previousFeedback;
+                feedbackValid = true;
+            } else {
+                feedbackValid = false;
+            }
+            if (hasFeedback) {
+                previousFeedback = receiveData;
+                previousFeedbackAt = receivedAt;
+                hasPreviousFeedback = true;
+            }
         }
         sendData.Gimbal_Ctrl = TRoMaC::kIncrementalCommand;
         sendData.Push_flag = 1;
@@ -440,6 +459,17 @@ int main()
         if (feedbackValid) DrawTargetOverlay(image, model, controlT, baseToCam, cameraConfig);
         cv::putText(image, feedbackValid ? "feedback valid" : "feedback unavailable",
                     cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 255), 2);
+        std::string servoStatus;
+        if (!useSerial) servoStatus = "SERVO: serial unavailable";
+        else if (!feedbackValid) servoStatus = "SERVO: waiting for frame-time feedback";
+        else if (!kEnableServo) servoStatus = "SERVO: disabled";
+        else if (model.Lock() == LockState::IDLE)
+            servoStatus = cv::format("SERVO: fitting trajectory, samples=%zu", accumulated.size());
+        else if (!commandReady) servoStatus = "SERVO: no command";
+        else servoStatus = cv::format("SERVO: tracking yaw=%.1f pitch=%.1f",
+                                      sendData.yaw_angle, sendData.pitch_angle);
+        cv::putText(image, servoStatus, cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX,
+                    0.6, cv::Scalar(0, 255, 255), 2);
         if (kShowDebug) cv::imshow("Mask", mask);
         cv::imshow("Camera", image);
         const int key = cv::waitKey(1);
