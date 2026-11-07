@@ -31,6 +31,11 @@ int main() {
     assert(std::abs(fit->phase.omega - 1.2) < 1e-8);
     assert((fit->geom.Predict(fit->phase.PhaseAt(times.back())) - points.back()).Norm().value() < 1e-8);
     assert(!FitAll({}, {}, 0.0));
+    const auto refined = RefineGeometryStep(geometry, {geometry.center + geometry.u * 0.8},
+                                            0.2, 0.2, 0.005, 0.005);
+    assert(refined.valid);
+    assert(std::abs((refined.center - geometry.center).Norm().value() - 0.005) < 1e-9);
+    assert(std::abs(refined.radius - 0.705) < 1e-9);
 
     const frc::Transform3d transform{{1.0, 2.0, 3.0}, frc::Rotation3d{0.0, 0.0, std::numbers::pi / 2.0}};
     const auto transformed = CamToBase({1.0, 0.0, 0.0}, transform);
@@ -83,26 +88,48 @@ int main() {
     fire.SetEnabled(true);
     assert(fire.Update(2.0, model, true) == 1);
 
+    const CameraConfig camera{cv::Matx33d{1000, 0, 640, 0, 1000, 360, 0, 0, 1}, {}, 0.12};
+    const std::vector<cv::Point3f> object{{0, -0.06F, 0}, {0.06F, 0, 0}, {0, 0.06F, 0}, {-0.06F, 0, 0}};
+    for (int direction : {-1, 1}) {
     TargetModel integrated;
     integrated.LoadKnownGeometry({0.0, 0.0, 2.0}, 0.3, {0.0, 0.0, 1.0});
+    integrated.phase.direction = -direction;
     std::vector<frc::Translation3d> accumulated;
     std::vector<double> accumulated_times;
     double residual_time = 0.0;
-    const CameraConfig camera{cv::Matx33d{1000, 0, 640, 0, 1000, 360, 0, 0, 1}, {}, 0.12};
-    const std::vector<cv::Point3f> object{{0, -0.06F, 0}, {0.06F, 0, 0}, {0, 0.06F, 0}, {-0.06F, 0, 0}};
-    for (int index = 0; index < 20 && integrated.Lock() == LockState::IDLE; ++index) {
+    for (int index = 0; index < 40 && integrated.Lock() == LockState::IDLE; ++index) {
         const double time = 100.0 + index * 0.04;
-        const auto point = integrated.geom.Predict(0.4 + 1.2 * (time - 100.0));
+        const auto point = integrated.geom.Predict(direction * (3.0 + 1.2 * (time - 100.0)));
         std::vector<cv::Point2f> pixels;
         cv::projectPoints(object, cv::Vec3d{0.0, 0.0, 0.0},
                           cv::Vec3d{point.X().value(), point.Y().value(), point.Z().value()},
                           camera.K, camera.D, pixels);
         VisionFrame frame{time, pixels, {}, true};
         OnVisionFrame(frame, camera, {}, integrated, accumulated, accumulated_times, residual_time);
+        if (index < 13) assert(integrated.Lock() == LockState::IDLE);
     }
     assert(integrated.Lock() == LockState::LOCKED);
+    assert(integrated.phase.direction == direction);
+    assert(std::abs(integrated.phase.omega - 1.2) < 0.01);
     assert(integrated.state.last_obs_time > 100.0);
     assert(accumulated.empty() && accumulated_times.empty());
     integrated.Tick(integrated.state.last_obs_time + 0.01, 0.01);
     assert(integrated.Lock() == LockState::LOCKED);
+    }
+
+    TargetModel stationary;
+    stationary.LoadKnownGeometry({0.0, 0.0, 2.0}, 0.3, {0.0, 0.0, 1.0});
+    std::vector<frc::Translation3d> stationary_points;
+    std::vector<double> stationary_times;
+    double stationary_residual_time = 0.0;
+    const auto stationary_point = stationary.geom.Predict(0.4);
+    std::vector<cv::Point2f> stationary_pixels;
+    cv::projectPoints(object, cv::Vec3d{},
+                      cv::Vec3d{stationary_point.X().value(), stationary_point.Y().value(), stationary_point.Z().value()},
+                      camera.K, camera.D, stationary_pixels);
+    for (int index = 0; index < 100; ++index) {
+        VisionFrame frame{100.0 + index * 0.04, stationary_pixels, {}, true};
+        OnVisionFrame(frame, camera, {}, stationary, stationary_points, stationary_times, stationary_residual_time);
+    }
+    assert(stationary.Lock() == LockState::IDLE);
 }

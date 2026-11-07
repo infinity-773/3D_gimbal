@@ -458,12 +458,12 @@ int main()
             std::cout << "开火开关: " << (fireControl.IsEnabled() ? "ON" : "OFF") << '\n';
         }
         if (key == 'c' || key == 'C') ringDetector.CycleColorMode();
-        const bool servoReady = kEnableServo && feedbackValid && commandReady && useSerial;
-        if (fireControl.IsEnabled() && servoReady) {
+        if (fireControl.IsEnabled()) {
             sendData.left_speed = kFlywheelSpeed;
             sendData.right_speed = kFlywheelSpeed;
         }
-        sendData.Push_flag = static_cast<std::uint8_t>(fireControl.Update(controlT, model, servoReady));
+        sendData.Push_flag = static_cast<std::uint8_t>(
+            fireControl.Update(controlT, model, kEnableServo && feedbackValid && commandReady && useSerial));
         /*---------图像识别和控制编写区域结束----------*/
 
         /*---------禁止修改：发布发送数据、退出清理----------*/

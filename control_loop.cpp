@@ -4,10 +4,19 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numbers>
 #include <utility>
 
 namespace {
 ServoCallback servo_callback;
+constexpr std::size_t kPhaseMinFrames = 8;
+constexpr double kPhaseMinDuration = 0.5;
+constexpr double kPhaseMinTravel = 5.0 * std::numbers::pi / 180.0;
+constexpr double kPhaseWindow = 3.0;
+constexpr double kGeomCenterGain = 0.2;
+constexpr double kGeomRadiusGain = 0.2;
+constexpr double kGeomMaxCenterStep = 0.005;
+constexpr double kGeomMaxRadiusStep = 0.005;
 }
 
 FireController::FireController(double shot_interval, double pulse_duration)
@@ -67,14 +76,21 @@ void OnVisionFrame(const VisionFrame& vf, const CameraConfig& cam,
         }
         pts_base_accum.push_back(representative);
         times_accum.push_back(vf.t);
-        if (model.geom.valid && pts_base_accum.size() >= 4) {
+        while (model.geom.valid && times_accum.size() > kPhaseMinFrames &&
+               vf.t - times_accum.front() > kPhaseWindow) {
+            pts_base_accum.erase(pts_base_accum.begin());
+            times_accum.erase(times_accum.begin());
+        }
+        if (model.geom.valid && pts_base_accum.size() >= kPhaseMinFrames &&
+            times_accum.back() - times_accum.front() >= kPhaseMinDuration) {
             std::vector<double> phases;
             for (const auto& point : pts_base_accum) {
                 const auto delta = point - model.geom.center;
                 phases.push_back(std::atan2(delta.Dot(model.geom.v).value(), delta.Dot(model.geom.u).value()));
             }
             const auto fit = FitPhase(phases, times_accum, model.phase.OmegaAt(vf.t));
-            if (fit && fit->rms_deg < 1.5 && fit->omega > 0.05 && fit->omega < 10.0) {
+            if (fit && fit->rms_deg < 1.5 && fit->omega > 0.05 && fit->omega < 10.0 &&
+                fit->omega * (times_accum.back() - times_accum.front()) >= kPhaseMinTravel) {
                 const PhaseModel phase{fit->phi_ref, fit->t_ref, fit->omega, fit->direction};
                 model.ApplyFit(model.geom, phase, TargetModel::WrapPi(phases.front() - phase.PhaseAt(times_accum.front())));
             }
@@ -82,13 +98,7 @@ void OnVisionFrame(const VisionFrame& vf, const CameraConfig& cam,
             const auto fit = FitAll(pts_base_accum, times_accum, model.phase.OmegaAt(vf.t));
             if (fit && fit->rms_deg < 1.5) model.ApplyFit(fit->geom, fit->phase, fit->phi_target_offset);
         }
-        if (model.Lock() != LockState::LOCKED) {
-            if (model.geom.valid && pts_base_accum.size() >= 5) {
-                pts_base_accum.erase(pts_base_accum.begin());
-                times_accum.erase(times_accum.begin());
-            }
-            return;
-        }
+        if (model.Lock() != LockState::LOCKED) return;
         model.state.last_obs_time = vf.t;
         pts_base_accum.clear();
         times_accum.clear();
@@ -102,7 +112,8 @@ void OnVisionFrame(const VisionFrame& vf, const CameraConfig& cam,
     const double elapsed = vf.t - previous_time;
     if (elapsed > 0.0 && elapsed <= 0.1) geom_residual_accum_time += elapsed;
     if (geom_residual_accum_time > 1.0) {
-        const auto refined = RefineGeometryStep(model.geom, points, 0.05, 0.05, 0.002, 0.002);
+        const auto refined = RefineGeometryStep(model.geom, points, kGeomCenterGain, kGeomRadiusGain,
+                                                kGeomMaxCenterStep, kGeomMaxRadiusStep);
         if (refined.valid) model.ApplyGeomRefine(refined.center, refined.radius);
         geom_residual_accum_time = 0.0;
     }
