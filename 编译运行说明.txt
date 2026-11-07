@@ -12,14 +12,12 @@ cmake --build build-local --target vision_gimbal -j
 ./build-local/vision_gimbal
 
 4) 运行前注意
-- 默认相机：cameraIndex = 0，分辨率 1280x720，fps = 30。
-- 默认串口开启：useSerial = true，serialPort = 1（/dev/ttyUSB_vision）。
-- 若未连接下位机，建议把 vision_gimbal.cpp 里的 useSerial 改为 false 后重新编译。
-- 轨迹圆心、半径和平面固定使用 vision_gimbal.cpp 中的 kPathCenterForwardM、kPathCenterLeftM、kPathCenterHeightM、kPathRadiusM 配置，不会在线拟合。
-- 若提示“3D aim waiting for feedback”，先检查下位机反馈；若 3D 位置不合理，请核对相机内参、目标尺寸和上述轨迹参数。
-- 瞄准关闭重力弹道补偿，按目标速度和固定 200 ms 提前量预测目标位置；可在 vision_gimbal.cpp 中调整 kTargetLeadTime。
+- 默认相机 /dev/video0，分辨率 1280x720，fps = 30。
+- 默认串口 /dev/ttyUSB_vision；没有反馈时不会生成伺服指令。
+- 运行前必须在 vision_gimbal.cpp 的全局算法参数区填写实测几何、相机参数和外参。
+- 伺服输出默认开启，开火默认关闭；按 F 切换开火，调试步骤见 README.md。
 - 退出按键：Q 或 Esc。
-- 常用按键：D(调试图开关)、S(存图)、C(切换目标颜色)、F(开火开关)。
+- 常用按键：C（切换目标颜色）、F（开关开火）。
 
 5) 相机标定程序（独立工程）
 参考 camera_calibration/README.md
