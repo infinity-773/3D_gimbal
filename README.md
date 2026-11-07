@@ -2,7 +2,7 @@
 
 ## 构建和运行
 
-依赖 CMake、C++20、OpenCV、Eigen；FRC 几何类型由仓库内的 `turret_kinematics` 提供。
+依赖 CMake、C++20 和 OpenCV；FRC 几何类型由仓库内的 `turret_kinematics` 提供。
 
 ```sh
 cmake -S . -B /tmp/energy-gimbal-build

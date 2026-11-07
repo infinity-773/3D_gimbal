@@ -8,18 +8,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc highgui videoio calib3d)
 find_package(Threads REQUIRED)
 
-find_package(Eigen3 3.3 QUIET NO_MODULE)
-if(NOT Eigen3_FOUND)
-    include(FetchContent)
-    FetchContent_Declare(
-        eigen
-        GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
-        GIT_TAG 3.4.0
-        GIT_SHALLOW TRUE
-    )
-    FetchContent_MakeAvailable(eigen)
-endif()
-
 add_subdirectory(Serial)
 add_subdirectory(turret_kinematics)
 
