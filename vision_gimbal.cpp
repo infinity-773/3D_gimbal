@@ -269,24 +269,20 @@ static PixelToWorldConfig makePTWConfig()
 
     // Camera optical (right, down, forward) -> gimbal (forward, left, up).
     // Translation is a placeholder: replace it with the measured camera offset.
-    config.T_camera_to_gimbal = cv::Matx44d(
-         0.0,  0.0,  1.0, 0.0,
-        -1.0,  0.0,  0.0, 0.0,
-         0.0, -1.0,  0.0, 0.0,
-         0.0,  0.0,  0.0, 1.0);
+    config.cameraInGimbal = turret_kinematics::Transform3d{
+        turret_kinematics::Translation3d{0.0, 0.0, 0.0},
+        turret_kinematics::Rotation3d::FromDegrees(-90.0, 0.0, -90.0)};
 
     // World origin is defined at the gimbal rotation center.
-    config.gimbal_origin_in_world = cv::Vec3d(0.0, 0.0, 0.0);
+    config.gimbalOriginInWorld = {0.0, 0.0, 0.0};
 
     // Placeholder target plane 2 m forward; replace with the measured plane.
-    config.target_plane_normal_world = cv::Vec3d(1.0, 0.0, 0.0);
-    config.target_plane_offset = 2.0;
-    config.use_plane_point = false;
+    config.targetPlaneNormalWorld = {1.0, 0.0, 0.0};
+    config.targetPlanePointWorld = {2.0, 0.0, 0.0};
 
-    config.yaw_sign = kRotationYawSign;
-    config.pitch_sign = kRotationPitchSign;
-    config.angles_in_degrees = true;
-    config.require_intersection_in_front = true;
+    config.yawSign = kRotationYawSign;
+    config.pitchSign = kRotationPitchSign;
+    config.requireIntersectionInFront = true;
     return config;
 }
 PixelToWorld pixelToWorld(makePTWConfig());
@@ -739,18 +735,17 @@ int main()
                 return frc::Translation3d{};
             }
 
-            const BackProjectionResult projection = pixelToWorld.BackProjection(
-                target.center.x, target.center.y,
-                feedback.pitch_angle, feedback.yaw_angle);
-            if (!projection.valid)
+            const auto targetInWorld = pixelToWorld.projectPixelToWorld(
+                cv::Point2d{target.center.x, target.center.y},
+                GimbalAngles{
+                    units::degree_t{feedback.pitch_angle},
+                    units::degree_t{feedback.yaw_angle}});
+            if (!targetInWorld)
             {
                 return frc::Translation3d{};
             }
 
-            return frc::Translation3d{
-                projection.world_point.x,
-                projection.world_point.y,
-                projection.world_point.z};
+            return *targetInWorld;
         }();
 
         estimator.calc(targetInBase , controllerNow);
