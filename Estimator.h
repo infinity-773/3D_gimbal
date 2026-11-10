@@ -85,7 +85,7 @@ public:
                     expectedCenter.Y().value() + delta.at<double>(1,0),
                     expectedCenter.Z().value() + delta.at<double>(0,0)
             };
-            //残差小于阈值，结束本周期迭代
+            //Δ小于阈值，结束本周期迭代
             if(cv::norm(delta) < 1e-5) break;
         }
     };

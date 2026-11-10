@@ -21,7 +21,7 @@
 #include "SuperStructure.h"
 #include "Debouncer.h"
 #include "MathUtils.h"
-#include "CircularMotionPredictor.h"
+#include "PixelToWorld.h"
 #include <string>
 #include <vector>
 /*---------添加区域结束----------*/
@@ -44,7 +44,7 @@ int height = 720;
 // 请求帧率
 // 上述 MJPG 分辨率均支持 25、30、60 fps；YUYV 仅列出 10 fps。
 // 长曝光、USB 带宽等因素仍可能使实际帧率降低。
-int fps = 30;
+int fps = 60;
 
 // 串口开关
 // 没接下位机时改成 false，只调图像。
@@ -79,7 +79,7 @@ int serialBaudRate = 230400;
 // 范围：OpenCV 后端允许 1～10 帧，默认 4；实际分配受驱动限制。
 // 作用：设为 1 可以减少排队的旧画面。
 // 注意：缓冲不是图像控制项，不能用 --list-ctrls 查询范围。
-int cameraBufferSize = 1;
+int cameraBufferSize = 0;
 
 
 // 【曝光与亮度】
@@ -94,12 +94,12 @@ int cameraAutoExposure = 1;
 // 单位：100 us，即 19 = 1.9 ms，166 = 16.6 ms。
 // 实际时间范围：0.1～1000 ms。
 // 作用：增大通常更亮，但运动拖影更明显，过长还可能降低实际帧率。
-int cameraExposure = 17;
+int cameraExposure = 10;
 
 // 亮度
 // 范围：-64～64，步长 1，默认 0。
 // 作用：调整画面整体明暗。
-int cameraBrightness = 17;
+int cameraBrightness = 10;
 
 // 对比度
 // 范围：0～100，步长 1，默认 35。
@@ -258,6 +258,41 @@ static SuperStructureConfig makeSuperStructureConfig()
     return config;
 }
 SuperStructure superStructure(makeSuperStructureConfig(), kControlOutputMode);
+
+static PixelToWorldConfig makePTWConfig()
+{
+    PixelToWorldConfig config;
+    config.fx = kFocalPx;
+    config.fy = kFocalPx;
+    config.cx = width * 0.5;
+    config.cy = height * 0.5;
+
+    // Camera optical (right, down, forward) -> gimbal (forward, left, up).
+    // Translation is a placeholder: replace it with the measured camera offset.
+    config.T_camera_to_gimbal = cv::Matx44d(
+         0.0,  0.0,  1.0, 0.0,
+        -1.0,  0.0,  0.0, 0.0,
+         0.0, -1.0,  0.0, 0.0,
+         0.0,  0.0,  0.0, 1.0);
+
+    // World origin is defined at the gimbal rotation center.
+    config.gimbal_origin_in_world = cv::Vec3d(0.0, 0.0, 0.0);
+
+    // Placeholder target plane 2 m forward; replace with the measured plane.
+    config.target_plane_normal_world = cv::Vec3d(1.0, 0.0, 0.0);
+    config.target_plane_offset = 2.0;
+    config.use_plane_point = false;
+
+    config.yaw_sign = kRotationYawSign;
+    config.pitch_sign = kRotationPitchSign;
+    config.angles_in_degrees = true;
+    config.require_intersection_in_front = true;
+    return config;
+}
+PixelToWorld pixelToWorld(makePTWConfig());
+
+
+
 /*---------全局变量编写区域结束----------*/
 
 
@@ -698,27 +733,38 @@ int main()
             0.001, 0.1);
         g_lastControlAt = frameReceivedAt;
 
-        superStructure.updateBoxes(BoxContainer(selectedBoxes));
-        superStructure.periodic(feedback, controllerNow, controlDt, feedbackValid);
+        frc::Translation3d targetInBase = [&]() {
+            if (!target.valid || !feedbackValid)
+            {
+                return frc::Translation3d{};
+            }
 
-        const OutputData& controlOutput = superStructure.getoutput();
-        if (!feedbackValid)
-        {
-            sendData.Gimbal_Ctrl = 2;
-        }
-        else if (controlOutput.mode == ControlOutputMode::Position)
-        {
-            sendData.Gimbal_Ctrl = 1;
-            sendData.yaw_angle = static_cast<float>(controlOutput.axis.yaw);
-            sendData.pitch_angle = static_cast<float>(controlOutput.axis.pitch);
-        }
-        else
-        {
-            sendData.Gimbal_Ctrl = 2;
-            sendData.yaw_delta_angle = static_cast<float>(controlOutput.axis.yaw);
-            sendData.pitch_delta_angle = static_cast<float>(controlOutput.axis.pitch);
-        }
+            const BackProjectionResult projection = pixelToWorld.BackProjection(
+                target.center.x, target.center.y,
+                feedback.pitch_angle, feedback.yaw_angle);
+            if (!projection.valid)
+            {
+                return frc::Translation3d{};
+            }
 
+            return frc::Translation3d{
+                projection.world_point.x,
+                projection.world_point.y,
+                projection.world_point.z};
+        }();
+
+        estimator.calc(targetInBase , controllerNow);
+        if(estimator.getRes() < 0.05){
+          model.update(estimator.getExpCenter());
+        }
+        
+        frc::Translation3d expTarget = model.getExpCenter();
+
+        sendData.Gimbal_Ctrl = 1;
+        sendData.yaw_angle = static_cast<float>(controlOutput.axis.yaw);
+        sendData.pitch_angle = static_cast<float>(controlOutput.axis.pitch);
+        
+   
         // 对准了就开火
         const auto now = std::chrono::steady_clock::now();
 

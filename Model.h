@@ -17,24 +17,40 @@ using Transform3d = turret_kinematics::Transform3d;
 class Model {
 public:
     Model(double distance = 2.0, double radius = 0.275): 
-        center{distance, 0.0, 0.0}, r{radius}, omega{PI/5} {}
+        center{distance, 0.0, 0.0}, r{radius}, omega{PI/3} {}
 
-    frc::Translation3d getPhaseAtTime(double dt , frc::Translation3d const& currTarget){
+    frc::Translation3d getPhaseAtTime(double dt , frc::Translation3d const& currTarget ,bool Anti){
         double phi = omega * dt;
         double dz = r * gcem::sin(phi);
         double dy = r * gcem::cos(phi);
+        if(Anti){
+            dz *= -1;
+            dy *= -1;
+        }
         return frc::Translation3d{
-            center.X().value(),
-            center.Y().value() + dy,
-            center.Z().value() + dz
+            currTarget.X().value(),
+            currTarget.Y().value() + dy,
+            currTarget.Z().value() + dz
         };
     };
 
-    void updateModel(frc::Translation3d const& center, double r, double omega);
-    void updatetime(double t);
-    void updateCenter(frc::Translation3d const& center);
-    void updateOmega(double omega);
-    void updateRadius(double r);
+    void updateModel(frc::Translation3d const& center, double r, double omega){
+        this->omega = omega;
+        this->r = r;
+        this->center = center;
+    };
+    void updatetime(double t){
+        this->time = t;
+    };
+    void updateCenter(frc::Translation3d const& center){
+        this->center = center;
+    };
+    void updateOmega(double omega){
+        this->omega = omega;
+    };
+    void updateRadius(double r){
+        this->r = r;
+    }   ;
 
 
 
