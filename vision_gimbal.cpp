@@ -697,31 +697,7 @@ int main()
             std::chrono::duration<double>(frameReceivedAt - g_lastControlAt).count(),
             0.001, 0.1);
         g_lastControlAt = frameReceivedAt;
-        static CircularMotionPredictor motionPredictor(
-            kFocalPx, image.cols * 0.5, image.rows * 0.5,
-            kRotationYawSign, kRotationPitchSign);
-        CircularPrediction prediction;
-        if (target.valid && feedbackValid)
-        {
-            prediction = motionPredictor.update(
-                target.center, feedback.yaw_angle, feedback.pitch_angle,
-                std::chrono::duration<double>(frameReceivedAt - controllerStart).count(),
-                kPredictionSeconds);
-        }
-        else
-        {
-            motionPredictor.reset();
-        }
-        const bool predictionUsable = target.valid && feedbackValid && prediction.valid &&
-            prediction.predicted.x >= 0.0 && prediction.predicted.x < image.cols &&
-            prediction.predicted.y >= 0.0 && prediction.predicted.y < image.rows;
-        std::vector<cv::Rect> selectedBoxes;
-        if (predictionUsable)
-        {
-            const int predictedX = cvRound(prediction.predicted.x);
-            const int predictedY = cvRound(prediction.predicted.y);
-            selectedBoxes.emplace_back(predictedX - 1, predictedY - 1, 2, 2);
-        }
+
         superStructure.updateBoxes(BoxContainer(selectedBoxes));
         superStructure.periodic(feedback, controllerNow, controlDt, feedbackValid);
 
@@ -746,11 +722,11 @@ int main()
         // 对准了就开火
         const auto now = std::chrono::steady_clock::now();
 
-        const bool targetMovedAway = predictionUsable &&
+        const bool targetMovedAway = 
             std::hypot(controlOutput.targetOffsetPx.yaw,
                        controlOutput.targetOffsetPx.pitch) > kFireRearmOffsetPx;
         bool aimed;
-        if (!predictionUsable || targetMovedAway)
+        if (targetMovedAway)
         {
             aimedDebouncer.reset(false);
             aimed = false;

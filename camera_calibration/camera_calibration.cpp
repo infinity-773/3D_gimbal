@@ -198,7 +198,7 @@ int main(int argc, char** argv)
     int cameraIndex = 0;
     int requestedWidth = 1280;
     int requestedHeight = 720;
-    constexpr int kRequestedFps = 30;
+    constexpr int kRequestedFps = 60;
     if (!ParsePositiveInt(argv[1], innerCols) || innerCols < 2 ||
         !ParsePositiveInt(argv[2], innerRows) || innerRows < 2 ||
         !ParsePositiveDouble(argv[3], squareSizeMm) ||
