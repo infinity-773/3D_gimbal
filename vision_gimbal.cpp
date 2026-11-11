@@ -216,24 +216,21 @@ static double kMaxStep = 4.0;       // PID 输出限幅，单位度
 
 
 // 开火
-static double kAimTolPx = 13;         // 差多少像素算对准（需调参）
-static int    kAimFrames = 3;           // 连着几帧对上才打（需调参）
-static int    kShotIntervalMs = 1000;    // 两发之间隔多久（需调参）
-static int    kPushRetractMs = 200;     // 发射时推杆回缩时间，之后恢复伸出并保持
+static double kTolIndeg = 5;
+static int kPushRetractMs = 200; // 推杆回缩脉冲时长
 static double kIntegralEnableOffsetPx = 40.0; // 目标距中心不超过此值时启用积分
 static double kFireRearmOffsetPx = 50.0; // 目标偏离中心超过此值时重新允许开火
 static double kCommandSlewRateDegPerSec = 15; // 绝对角度指令最大变化速度
+static double kAimTolPx = 20.0;
 
 // 跨帧要记住的
-static int  g_aimedFrames = 0;
 static int  g_shotsFired = 0;
-static bool g_shotArmed = true;
 static bool g_pushRetracting = false;
+static std::chrono::steady_clock::time_point g_pushRetractStartedAt;
+static bool g_aimedRaw = false;
+static bool g_aimedStable = false;
 static int  g_frameIndex = 0;
 static std::chrono::steady_clock::time_point g_lastControlAt;
-static std::chrono::steady_clock::time_point g_lastShotAt =
-    std::chrono::steady_clock::now() - std::chrono::seconds(10);   // 开机就能打
-static std::chrono::steady_clock::time_point g_pushRetractStartedAt;
 static bool g_modelLocked = false;
 static bool g_commandInitialized = false;
 static double g_commandYaw = 0.0;
@@ -242,7 +239,7 @@ static double g_commandPitch = 0.0;
 
 //初始化
 Debouncer aimedDebouncer(10, DebounceEdge::Rising);
-Debouncer modelLockDebouncer(10, DebounceEdge::Rising);
+Debouncer modelLockDebouncer(15, DebounceEdge::Rising);
 static Model model = Model(2.0 , 0.210);
 static CenterEstimator estimator = CenterEstimator(frc::Translation3d{2.0 , 0.0 , 0.270}, model.getRadius());
 
@@ -251,10 +248,10 @@ static CenterEstimator estimator = CenterEstimator(frc::Translation3d{2.0 , 0.0 
 static PixelToWorldConfig makePTWConfig()
 {
     PixelToWorldConfig config;
-    config.fx = 1374;
-    config.fy = 1374;
-    config.cx = 685;
-    config.cy = 361;
+    config.fx = kFocalPx;
+    config.fy = kFocalPx;
+    config.cx = kAimU;
+    config.cy = kAimV;
     config.distortion = kCamDistD;
 
     // Camera optical (right, down, forward) -> gimbal (forward, left, up).
@@ -350,43 +347,55 @@ void receiveLoop()
 /*---------需要编写：自己的算法函数（按需添加）----------*/
 // 在这里定义圆环识别、弹道解算等函数，再到主循环的动手区调用。
 
+static bool ifInTol(float yaw_error, float pitch_error);
 
-static uint8_t updateFireControl(bool aimed, std::chrono::steady_clock::time_point now)
+static uint8_t updateFireControl(bool targetValid,
+                                 bool feedbackValid,
+                                 const AxisData& desiredAngles,
+                                 const TRoMaC::GimbalFeedback& feedback,
+                                 std::chrono::steady_clock::time_point now)
 {
-    if (aimed)
+    const bool validAimData = targetValid && feedbackValid &&
+        std::isfinite(desiredAngles.yaw) &&
+        std::isfinite(desiredAngles.pitch) &&
+        std::isfinite(feedback.yaw_angle) &&
+        std::isfinite(feedback.pitch_angle);
+
+    if (!validAimData)
     {
-        ++g_aimedFrames;
-        g_shotArmed = true;
+        g_aimedRaw = false;
+        g_aimedStable = false;
+
     }
     else
     {
-        g_aimedFrames = 0;
-        g_shotArmed = true;
+        const double yawError = desiredAngles.yaw - static_cast<double>(feedback.yaw_angle);
+        const double pitchError = desiredAngles.pitch - static_cast<double>(feedback.pitch_angle);
+        g_aimedRaw = ifInTol(static_cast<float>(yawError), static_cast<float>(pitchError));
+        g_aimedStable = aimedDebouncer.update(g_aimedRaw);
+
     }
-    if (aimed)
+
+    if (kEnableFire && g_aimedStable)
     {
-        const auto sinceLastShot =
-            std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastShotAt).count();
-        if (kEnableFire && g_aimedFrames >= kAimFrames &&
-            g_shotArmed && sinceLastShot >= kShotIntervalMs)
-        {
-            g_shotArmed = false;
-            g_lastShotAt = now;
-            ++g_shotsFired;
-            g_pushRetracting = true;
-            g_pushRetractStartedAt = now;
-            std::cout << "[FIRE] 第 " << g_shotsFired << " 发\n";
-        }
+        g_pushRetracting = true;
+        g_pushRetractStartedAt = now;
+        ++g_shotsFired;
+        std::cout << "[FIRE] 第 " << g_shotsFired << " 发\n";
     }
 
     if (g_pushRetracting &&
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            now - g_pushRetractStartedAt).count() >= kPushRetractMs)
+        now - g_pushRetractStartedAt >= std::chrono::milliseconds(kPushRetractMs))
     {
         g_pushRetracting = false;
     }
 
     return g_pushRetracting ? 0 : 1;
+}
+
+bool ifInTol(float yaw_error, float pitch_error)
+{
+    return std::abs(yaw_error) <= kTolIndeg && std::abs(pitch_error) <= kTolIndeg;
 }
 
 // 圆环检测
@@ -799,22 +808,42 @@ int main()
             sendData.pitch_angle = static_cast<float>(g_commandPitch);
         }
 
-        // 对准了就开火
-        const auto now = std::chrono::steady_clock::now();
-
-        bool aimed = true;
-
-        sendData.Push_flag = updateFireControl(aimed, now);
+        sendData.Push_flag = updateFireControl(
+            g_modelLocked && targetProjectionValid,
+            feedbackValid,
+            leadAngles,
+            feedback,
+            frameReceivedAt);
 
         // 画图
+        const auto center = model.getExpCenter();
+        const GimbalAngles anglesInUnits{
+            units::degree_t{feedback.pitch_angle},
+                units::degree_t{feedback.yaw_angle}};
+        cv::putText(image,
+                    cv::format("center=(%.3f, %.3f, %.3f) m",
+                               center.X().value(), center.Y().value(), center.Z().value()),
+                    cv::Point(10, 150), cv::FONT_HERSHEY_SIMPLEX, 0.6,
+                    cv::Scalar(255, 255, 0), 2);
         cv::circle(image, cv::Point(static_cast<int>(kAimU), static_cast<int>(kAimV)),
                    6, cv::Scalar(0, 255, 0), 2);
+
+        const frc::Translation3d edge{
+            center.X().value(),
+            center.Y().value() + model.getRadius(),
+            center.Z().value()};
+
+        const auto centerPixel = pixelToWorld.worldToPixel(center, anglesInUnits);
+        const auto edgePixel = pixelToWorld.worldToPixel(edge, anglesInUnits);
+
+        const int radiusPx = cvRound(cv::norm(*edgePixel - *centerPixel));
+        cv::circle(image, *centerPixel, radiusPx, cv::Scalar(255, 255, 0), 2);
         if (target.valid)
         {
             const cv::Point targetcenter(static_cast<int>(target.center.x),
                                    static_cast<int>(target.center.y));
             cv::Scalar color;
-            if (aimed == true)
+            if (g_aimedStable == true)
             {
                 color = cv::Scalar(0, 255, 0);
             }
@@ -840,14 +869,10 @@ int main()
                         cv::Scalar(0, 255, 255), 2);
 
         //轨迹圆 && 目标点
-            const auto center = model.getExpCenter();
-            const GimbalAngles angles{
-            units::degree_t{feedback.pitch_angle},
-                units::degree_t{feedback.yaw_angle}};
 
             if (targetProjectionValid)
             {
-                const auto predictedPixel = pixelToWorld.worldToPixel(expTarget, angles);
+                const auto predictedPixel = pixelToWorld.worldToPixel(expTarget, anglesInUnits);
 
                 const cv::Point predictedPoint(cvRound(predictedPixel->x),
                                                    cvRound(predictedPixel->y));
@@ -857,17 +882,6 @@ int main()
                                 cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(255, 0, 255), 1);
                 
             }
-
-            const frc::Translation3d edge{
-            center.X().value(),
-            center.Y().value() + model.getRadius(),
-                center.Z().value()};
-
-            const auto centerPixel = pixelToWorld.worldToPixel(center, angles);
-            const auto edgePixel = pixelToWorld.worldToPixel(edge, angles);
-
-                const int radiusPx = cvRound(cv::norm(*edgePixel - *centerPixel));
-                cv::circle(image, *centerPixel, radiusPx, cv::Scalar(255, 255, 0), 2);
             
         }
         else
