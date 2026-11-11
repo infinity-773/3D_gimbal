@@ -12,9 +12,7 @@ cmake --build build-local --target vision_gimbal -j
 ./build-local/vision_gimbal
 
 4) 运行前注意
-- 默认相机 /dev/video0，分辨率 1280x720，fps = 30。
-- 默认串口 /dev/ttyUSB_vision；没有反馈时不会生成伺服指令。
-- 运行前必须在 vision_gimbal.cpp 的全局算法参数区填写实测几何、相机参数和外参。
+
 - 伺服输出默认开启，开火默认关闭；按 F 切换开火，调试步骤见 README.md。
 - 退出按键：Q 或 Esc。
 - 常用按键：C（切换目标颜色）、F（开关开火）。

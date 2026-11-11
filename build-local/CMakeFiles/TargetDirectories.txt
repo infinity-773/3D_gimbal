@@ -1,9 +1,0 @@
-/home/tromac-test/vision/3D/3D_gimbal/build-local/CMakeFiles/vision_gimbal.dir
-/home/tromac-test/vision/3D/3D_gimbal/build-local/CMakeFiles/edit_cache.dir
-/home/tromac-test/vision/3D/3D_gimbal/build-local/CMakeFiles/rebuild_cache.dir
-/home/tromac-test/vision/3D/3D_gimbal/build-local/Serial/CMakeFiles/tromac_serial.dir
-/home/tromac-test/vision/3D/3D_gimbal/build-local/Serial/CMakeFiles/edit_cache.dir
-/home/tromac-test/vision/3D/3D_gimbal/build-local/Serial/CMakeFiles/rebuild_cache.dir
-/home/tromac-test/vision/3D/3D_gimbal/build-local/turret_kinematics/CMakeFiles/test_turret_kinematics.dir
-/home/tromac-test/vision/3D/3D_gimbal/build-local/turret_kinematics/CMakeFiles/edit_cache.dir
-/home/tromac-test/vision/3D/3D_gimbal/build-local/turret_kinematics/CMakeFiles/rebuild_cache.dir

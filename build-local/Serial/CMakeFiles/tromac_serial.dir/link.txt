@@ -1,2 +1,0 @@
-/usr/bin/ar qc libtromac_serial.a CMakeFiles/tromac_serial.dir/Serial.cpp.o
-/usr/bin/ranlib libtromac_serial.a
