@@ -2,6 +2,7 @@
 #define MODEL_H
 #include "gcem.hpp"
 #include <turret_kinematics/Pose3d.h>
+#include <cmath>
 
 #define PI 3.14159265358979323846
 
@@ -16,21 +17,22 @@ using Transform3d = turret_kinematics::Transform3d;
 
 class Model {
 public:
-    Model(double distance = 2.0, double radius = 0.275): 
-        center{distance, 0.0, 0.0}, r{radius}, omega{PI/3} {}
+    Model(double distance = 2.0, double radius = 0.270): 
+        center{distance, 0.0, 0.0}, r{radius}, omega{PI/6} {}
 
     frc::Translation3d getPhaseAtTime(double dt , frc::Translation3d const& currTarget ,bool Anti){
-        double phi = omega * dt;
-        double dz = r * gcem::sin(phi);
-        double dy = r * gcem::cos(phi);
-        if(Anti){
-            dz *= -1;
-            dy *= -1;
-        }
+        const double dy = currTarget.Y().value() - center.Y().value();
+        const double dz = currTarget.Z().value() - center.Z().value();
+        const double phi = (Anti ? -1.0 : 1.0) * omega * dt;
+        const double cosPhi = std::cos(phi);
+        const double sinPhi = std::sin(phi);
+        const double rotatedY = dy * cosPhi - dz * sinPhi;
+        const double rotatedZ = dy * sinPhi + dz * cosPhi;
+
         return frc::Translation3d{
             currTarget.X().value(),
-            currTarget.Y().value() + dy,
-            currTarget.Z().value() + dz
+            center.Y().value() + rotatedY,
+            center.Z().value() + rotatedZ
         };
     };
 
@@ -55,6 +57,10 @@ public:
 
     double getRadius() const {
         return r;
+    }
+
+    frc::Translation3d getExpCenter() const {
+        return center;
     }
 
 

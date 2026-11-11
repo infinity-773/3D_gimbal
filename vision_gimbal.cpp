@@ -218,10 +218,11 @@ static double kMaxStep = 4.0;       // PID 输出限幅，单位度
 // 开火
 static double kAimTolPx = 13;         // 差多少像素算对准（需调参）
 static int    kAimFrames = 3;           // 连着几帧对上才打（需调参）
-static int    kShotIntervalMs = 800;    // 两发之间隔多久（需调参）
+static int    kShotIntervalMs = 1000;    // 两发之间隔多久（需调参）
 static int    kPushRetractMs = 200;     // 发射时推杆回缩时间，之后恢复伸出并保持
 static double kIntegralEnableOffsetPx = 40.0; // 目标距中心不超过此值时启用积分
 static double kFireRearmOffsetPx = 50.0; // 目标偏离中心超过此值时重新允许开火
+static double kCommandSlewRateDegPerSec = 15; // 绝对角度指令最大变化速度
 
 // 跨帧要记住的
 static int  g_aimedFrames = 0;
@@ -233,22 +234,27 @@ static std::chrono::steady_clock::time_point g_lastControlAt;
 static std::chrono::steady_clock::time_point g_lastShotAt =
     std::chrono::steady_clock::now() - std::chrono::seconds(10);   // 开机就能打
 static std::chrono::steady_clock::time_point g_pushRetractStartedAt;
+static bool g_modelLocked = false;
+static bool g_commandInitialized = false;
+static double g_commandYaw = 0.0;
+static double g_commandPitch = 0.0;
 
 
 //初始化
 Debouncer aimedDebouncer(10, DebounceEdge::Rising);
+Debouncer modelLockDebouncer(10, DebounceEdge::Rising);
+static Model model = Model(2.0 , 0.210);
+static CenterEstimator estimator = CenterEstimator(frc::Translation3d{2.0 , 0.0 , 0.270}, model.getRadius());
 
-static CenterEstimator estimator = CenterEstimator();
 
-static Model model = Model();
 
 static PixelToWorldConfig makePTWConfig()
 {
     PixelToWorldConfig config;
-    config.fx = kFocalPx;
-    config.fy = kFocalPx;
-    config.cx = width * 0.5;
-    config.cy = height * 0.5;
+    config.fx = 1374;
+    config.fy = 1374;
+    config.cx = 685;
+    config.cy = 361;
     config.distortion = kCamDistD;
 
     // Camera optical (right, down, forward) -> gimbal (forward, left, up).
@@ -350,6 +356,7 @@ static uint8_t updateFireControl(bool aimed, std::chrono::steady_clock::time_poi
     if (aimed)
     {
         ++g_aimedFrames;
+        g_shotArmed = true;
     }
     else
     {
@@ -587,6 +594,7 @@ BladeTarget pickTarget(const std::vector<Rect>& boxes)
     }
     return best;
 }
+
 }
 /*---------算法函数编写区域结束----------*/
 
@@ -690,8 +698,9 @@ int main()
         sendData.Gimbal_Ctrl = 1;          // 2：增量控制；1：绝对角度控制。
         sendData.pitch_delta_angle = 0.0F;
         sendData.yaw_delta_angle = 0.0F;
-        sendData.pitch_angle = 0.0F;
-        sendData.yaw_angle = 0.0F;
+        // 没有有效目标时保持当前反馈角，不能把绝对角度指令清成 0。
+        sendData.pitch_angle = feedback.pitch_angle;
+        sendData.yaw_angle = feedback.yaw_angle;
         // 当前固定协议：左右摩擦轮目标速度、蜂鸣器和推杆标志。
         sendData.left_speed = 660;
         sendData.right_speed = 660;
@@ -716,7 +725,7 @@ int main()
 
         bool targetProjectionValid = false;
         frc::Translation3d targetInBase = [&]() {
-            if (!target.valid)
+            if (!target.valid || !feedbackValid)
             {
                 return frc::Translation3d{};
             }
@@ -735,26 +744,65 @@ int main()
             return *targetInWorld;
         }();
 
-        estimator.calc(targetInBase , controllerNow);
-        if(estimator.getRes() < 0.05){
-          model.updateCenter(estimator.getExpCenter());
+        if (targetProjectionValid)
+        {
+            estimator.calc(targetInBase, controllerNow);
+            if (std::isfinite(estimator.getRes()) &&
+                estimator.getRes() > 0.2)
+            {
+                estimator.reset();
+                modelLockDebouncer.reset(false);
+                std::cout << "拟合残差过大，已清空历史样本。\n";
+            }
+
+            const bool modelFitReady =
+                estimator.hasEnoughSamples() &&
+                std::isfinite(estimator.getRes()) &&
+                estimator.getRes() < 0.002;
+
+            if (!g_modelLocked &&
+                modelLockDebouncer.update(modelFitReady))
+            {
+                model.updateCenter(estimator.getExpCenter());
+                g_modelLocked = true;
+                std::cout << "模型已锁定，停止更新。\n";
+            }
         }
         
-        frc::Translation3d expTarget = model.getPhaseAtTime(0.3 , targetInBase ,true);
-
+        frc::Translation3d expTarget = model.getPhaseAtTime(0.8 , targetInBase ,true);
+        model.updateOmega(std::numbers::pi / 6);
         AxisData angles = getShootAngles(expTarget);
-        AxisData leadAngles = withLead(angles);
+        AxisData leadAngles = withLead(angles , -0.1);
 
 
         sendData.Gimbal_Ctrl = 1;
-        sendData.yaw_angle = static_cast<float>(leadAngles.yaw);
-        sendData.pitch_angle = static_cast<float>(leadAngles.pitch);
-        
-   
+        if (g_modelLocked && targetProjectionValid &&
+            std::isfinite(leadAngles.yaw) && std::isfinite(leadAngles.pitch))
+        {
+            if (!g_commandInitialized)
+            {
+                g_commandYaw = feedback.yaw_angle;
+                g_commandPitch = feedback.pitch_angle;
+                g_commandInitialized = true;
+            }
+
+            const double maxCommandStep =
+                kCommandSlewRateDegPerSec * controlDt;
+            g_commandYaw += clampValue(
+                leadAngles.yaw - g_commandYaw,
+                -maxCommandStep, maxCommandStep);
+            g_commandPitch += clampValue(
+                leadAngles.pitch - g_commandPitch,
+                -maxCommandStep, maxCommandStep);
+
+            sendData.yaw_angle = static_cast<float>(g_commandYaw);
+            sendData.pitch_angle = static_cast<float>(g_commandPitch);
+        }
+
         // 对准了就开火
         const auto now = std::chrono::steady_clock::now();
 
-        bool aimed = false;
+        bool aimed = true;
 
         sendData.Push_flag = updateFireControl(aimed, now);
 
@@ -786,12 +834,13 @@ int main()
                             " leadyaw=" + std::to_string(
                             static_cast<int>(leadAngles.yaw)) +
                             " leadpitch=" + std::to_string(
-                            static_cast<int>(leadAngles.pitch)),
+                            static_cast<int>(leadAngles.pitch)) +
+                            " res=" + cv::format("%.4f", estimator.getRes()),
                         cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7,
                         cv::Scalar(0, 255, 255), 2);
 
         //轨迹圆 && 目标点
-            const auto center = estimator.getExpCenter();
+            const auto center = model.getExpCenter();
             const GimbalAngles angles{
             units::degree_t{feedback.pitch_angle},
                 units::degree_t{feedback.yaw_angle}};
@@ -817,11 +866,9 @@ int main()
             const auto centerPixel = pixelToWorld.worldToPixel(center, angles);
             const auto edgePixel = pixelToWorld.worldToPixel(edge, angles);
 
-            if (centerPixel && edgePixel)
-            {
                 const int radiusPx = cvRound(cv::norm(*edgePixel - *centerPixel));
                 cv::circle(image, *centerPixel, radiusPx, cv::Scalar(255, 255, 0), 2);
-            }
+            
         }
         else
         {
