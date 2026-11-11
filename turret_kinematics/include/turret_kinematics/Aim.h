@@ -42,9 +42,13 @@ inline AimAngles AnglesTo(const Translation3d& target) {
     throw std::invalid_argument("Target vector must be finite and non-zero");
   }
   return {units::radian_t{std::atan2(target.Y().value(), target.X().value())},
-          units::radian_t{std::atan2(
+      units::radian_t{-std::atan2(
               target.Z().value(),
               std::hypot(target.X().value(), target.Y().value()))}};
+}
+
+inline AimAngles withlead (const AimAngles& angles){
+  return AimAngles{angles.yawRadians, angles.pitchRadians - units::radian_t{5}};
 }
 
 inline AimSetpoint MakeAimSetpoint(const std::array<double, 3>& displacement,
@@ -341,18 +345,18 @@ class Aimer {
   explicit Aimer(Config config) : m_config{config} {}
 
   std::optional<AimSetpoint> Calculate(
-      const Translation3d& targetRelativePosition,
-      const Velocity3d& targetVelocity) const {
+      const Translation3d& targetFromMuzzle,
+      const Velocity3d& targetVelocityInWorld) const {
     return detail::SolveBallistic(
-        targetRelativePosition, targetVelocity, m_config.projectileSpeed,
+        targetFromMuzzle, targetVelocityInWorld, m_config.projectileSpeed,
         m_config.gravity, m_config.maxFlightTime, m_config.scanSteps,
         m_config.bisectionSteps);
   }
 
   std::optional<AimSetpoint> CalculateLead(
-      const Translation3d& targetRelativePosition,
-      const Velocity3d& targetVelocity) const {
-    return detail::SolveLead(targetRelativePosition, targetVelocity,
+      const Translation3d& targetFromMuzzle,
+      const Velocity3d& targetVelocityInWorld) const {
+    return detail::SolveLead(targetFromMuzzle, targetVelocityInWorld,
                              m_config.projectileSpeed);
   }
 

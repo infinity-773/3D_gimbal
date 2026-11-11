@@ -1,7 +1,7 @@
 #ifndef MODEL_H
 #define MODEL_H
 #include "gcem.hpp"
-#include "turret_kinematics/TurretKinematics.h"
+#include <turret_kinematics/Pose3d.h>
 
 #define PI 3.14159265358979323846
 
@@ -52,6 +52,10 @@ public:
         this->r = r;
     }   ;
 
+
+    double getRadius() const {
+        return r;
+    }
 
 
 private:

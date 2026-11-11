@@ -21,7 +21,9 @@ A small, standalone C++20 header-only package for 3D coordinates, frame transfor
 
 Use a right-handed coordinate frame: +X forward, +Y left, +Z up. Geometry coordinates use `units::meter_t`; rotation inputs/results use `units::radian_t`; velocity, acceleration, and time use their corresponding `units` types. Compatible units convert automatically, so inches can be passed where meters are expected. The units headers are bundled under `include/units` and do not depend on roboRIO. The ballistic solver defaults to gravity `{0, 0, -9.80665} m/s^2`.
 
-All target positions and velocities passed to the aiming functions must already be relative to the muzzle and expressed in the same coordinate frame. Transform camera measurements into that frame with `Pose3d` and `Transform3d` before solving. `Rotation3d{roll, pitch, yaw}` takes radians; `Rotation3d::FromDegrees(...)` is also available.
+For aiming, `targetFromMuzzle` is the target position relative to the muzzle, with axes aligned to the fixed world/base frame. `targetVelocityInWorld` is the target velocity in that same fixed frame; for a moving muzzle use velocity relative to the muzzle. Transform camera measurements and the muzzle position into the same frame before subtracting them. `Rotation3d{roll, pitch, yaw}` takes radians; `Rotation3d::FromDegrees(...)` is also available.
+
+Aim angles are in radians: positive yaw points left and positive pitch points down, matching `Rotation3d{0, pitch, yaw}`. The launch velocity remains a world-frame vector, so an upward launch has positive Z and negative pitch.
 
 ## Example
 
@@ -49,7 +51,7 @@ int main() {
 
   std::cout << "yaw rad: " << solution->angles.yawRadians.value() << '\n'
             << "pitch rad: " << solution->angles.pitchRadians.value() << '\n'
-            << "flight seconds: " << solution->flightTimeSeconds.value() << '\n';
+            << "flight seconds: " << solution->flightTime.value() << '\n';
 }
 ```
 
@@ -89,4 +91,4 @@ ctest --test-dir build --output-on-failure
 
 To use it in another CMake project, add this directory with `add_subdirectory(...)` and link the `turret_kinematics` interface target. Without CMake, add `include/` to the compiler include paths.
 
-The solution angles are mathematical yaw/pitch, not calibrated servo commands. Apply your turret's zero offsets, direction signs, travel limits, and coordinate-frame calibration before commanding hardware. Geometry methods use WPILib-style names such as `X()`, `Norm()`, `RotateBy()`, `TransformBy()`, and `RelativeTo()`. Include `units::literals` to use suffixes such as `_m`, `_deg`, `_mps`, and `_ms`; alternatively construct a value directly, such as `units::meter_t{1.5}`.
+The solution angles follow the frame convention above, not necessarily calibrated servo commands. Apply your turret's zero offsets, direction signs, travel limits, and coordinate-frame calibration before commanding hardware. Geometry methods use WPILib-style names such as `X()`, `Norm()`, `RotateBy()`, `TransformBy()`, and `RelativeTo()`. Include `units::literals` to use suffixes such as `_m`, `_deg`, `_mps`, and `_ms`; alternatively construct a value directly, such as `units::meter_t{1.5}`.

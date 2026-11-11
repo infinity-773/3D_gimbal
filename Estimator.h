@@ -22,7 +22,7 @@ public:
     lambda(0.4),
     huber(0.05) {};
 
-    void calc(frc::Transform3d targetInBase , double now){
+    void calc(frc::Translation3d targetInBase , double now){
         //update targets
 
         if (targets
@@ -103,7 +103,7 @@ public:
 
 private:
     frc::Translation3d periorData{frc::Translation3d{2.0 , -0.07 , 0.275}};
-    std::deque<frc::Transform3d> targets;
+    std::deque<frc::Translation3d> targets;
     frc::Translation3d expectedCenter;
     double res = 0; //几何残差
     double lambda = 0.4;

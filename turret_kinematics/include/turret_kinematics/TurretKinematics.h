@@ -1,6 +1,6 @@
 #pragma once
 
-#include "turret_kinematics/Aimer.h"
+#include "turret_kinematics/Aim.h"
 #include "turret_kinematics/Pose3d.h"
 #include "turret_kinematics/Quaternion.h"
 #include "turret_kinematics/Rotation3d.h"

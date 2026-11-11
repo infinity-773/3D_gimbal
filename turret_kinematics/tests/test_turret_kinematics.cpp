@@ -51,6 +51,13 @@ int main() {
     const turret_kinematics::Velocity3d stationaryTarget{
     units::meters_per_second_t{0.0}, units::meters_per_second_t{0.0},
     units::meters_per_second_t{0.0}};
+  const auto upperLeft = leadAimer.CalculateLead({10.0, 1.0, 1.0}, stationaryTarget);
+  const auto lowerRight = leadAimer.CalculateLead({10.0, -1.0, -1.0}, stationaryTarget);
+  assert(upperLeft && lowerRight);
+  assert(upperLeft->angles.yawRadians.value() > 0.0);
+  assert(upperLeft->angles.pitchRadians.value() < 0.0);
+  assert(lowerRight->angles.yawRadians.value() < 0.0);
+  assert(lowerRight->angles.pitchRadians.value() > 0.0);
     turret_kinematics::Aimer::Config ballisticConfig;
     ballisticConfig.projectileSpeed = units::meters_per_second_t{20.0};
     ballisticConfig.gravity = {
@@ -61,7 +68,8 @@ int main() {
     const auto ballistic =
       ballisticAimer.Calculate({10.0, 0.0, 0.0}, stationaryTarget);
   assert(ballistic.has_value());
-  assert(ballistic->angles.pitchRadians.value() > 0.0);
+  assert(ballistic->angles.pitchRadians.value() < 0.0);
+  assert(ballistic->launchVelocity[2].value() > 0.0);
   assert(std::abs(std::hypot(ballistic->launchVelocity[0].value(),
                ballistic->launchVelocity[1].value(),
                ballistic->launchVelocity[2].value()) -

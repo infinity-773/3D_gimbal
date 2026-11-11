@@ -5,7 +5,7 @@
 #include <optional>
 
 #include <opencv2/core.hpp>
-#include <turret_kinematics/TurretKinematics.h>
+#include <turret_kinematics/Pose3d.h>
 
 struct PixelToWorldConfig
 {
@@ -14,6 +14,7 @@ struct PixelToWorldConfig
     double fy;
     double cx;
     double cy;
+    std::array<double, 5> distortion{};
 
     // Camera pose expressed in the gimbal frame.
     turret_kinematics::Transform3d cameraInGimbal;
@@ -56,6 +57,10 @@ public:
     std::optional<turret_kinematics::Translation3d> projectPixelToWorld(
         const cv::Point2d& pixel,
         const GimbalAngles& gimbalAngles) const;
+
+    std::optional<cv::Point2d> worldToPixel(
+        const turret_kinematics::Translation3d& point,
+        const GimbalAngles& angles) const;
 
 private:
     PixelToWorldConfig config_;

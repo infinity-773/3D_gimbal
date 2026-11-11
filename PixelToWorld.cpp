@@ -1,6 +1,9 @@
 #include "PixelToWorld.h"
 
 #include <cmath>
+#include <vector>
+
+#include <opencv2/calib3d.hpp>
 
 namespace
 {
@@ -23,15 +26,13 @@ PixelToWorldConfig::PixelToWorldConfig()
           turret_kinematics::Translation3d{0.0, 0.0, 0.0},
           turret_kinematics::Rotation3d::FromDegrees(-90.0, 0.0, -90.0)},
       gimbalOriginInWorld{0.0, 0.0, 0.0},
-      targetPlaneNormalWorld{0.0, 0.0, 1.0},
-      targetPlanePointWorld{0.0, 0.0, 2.0},
+      targetPlaneNormalWorld{1.0, 0.0, 0.0},
+      targetPlanePointWorld{2.0, 0.0, 0.0},
       yawOffset{0.0},
       pitchOffset{0.0},
       yawSign(1.0),
       pitchSign(1.0),
-      requireIntersectionInFront(true)
-      angles_in_degrees(true),
-      require_intersection_in_front(true)
+    requireIntersectionInFront(true)
 {
 }
 
@@ -79,9 +80,20 @@ std::optional<turret_kinematics::Translation3d> PixelToWorld::projectPixelToWorl
     const turret_kinematics::Pose3d cameraPoseInWorld =
         gimbalPoseInWorld.TransformBy(config_.cameraInGimbal);
 
+    const cv::Matx33d cameraMatrix{
+        config_.fx, 0.0, config_.cx,
+        0.0, config_.fy, config_.cy,
+        0.0, 0.0, 1.0};
+    const cv::Vec<double, 5> distortion{
+        config_.distortion[0], config_.distortion[1], config_.distortion[2],
+        config_.distortion[3], config_.distortion[4]};
+    std::vector<cv::Point2d> normalizedPoints;
+    cv::undistortPoints(std::vector<cv::Point2d>{pixel}, normalizedPoints,
+                        cameraMatrix, distortion);
+
     const turret_kinematics::Translation3d rayInCamera{
-        (pixel.x - config_.cx) / config_.fx,
-        (pixel.y - config_.cy) / config_.fy,
+        normalizedPoints[0].x,
+        normalizedPoints[0].y,
         1.0};
     const turret_kinematics::Translation3d rayInWorld =
         rayInCamera.RotateBy(cameraPoseInWorld.Rotation());
@@ -117,4 +129,47 @@ std::optional<turret_kinematics::Translation3d> PixelToWorld::projectPixelToWorl
     }
 
     return worldPoint;
+}
+
+std::optional<cv::Point2d> PixelToWorld::worldToPixel(
+    const turret_kinematics::Translation3d& point,
+    const GimbalAngles& angles) const
+{
+    const auto& config = config_;
+
+    const double yaw = config.yawSign *
+        (angles.yaw.value() + config.yawOffset.value()) * CV_PI / 180.0;
+    const double pitch = config.pitchSign *
+        (angles.pitch.value() + config.pitchOffset.value()) * CV_PI / 180.0;
+
+    const turret_kinematics::Pose3d gimbalPose{
+        config.gimbalOriginInWorld,
+        turret_kinematics::Rotation3d{0.0, pitch, yaw}};
+    const auto cameraPose = gimbalPose.TransformBy(config.cameraInGimbal);
+
+    const auto cameraPoint = (point - cameraPose.Translation())
+        .RotateBy(-cameraPose.Rotation());
+
+    if (!cameraPoint.IsFinite() || cameraPoint.Z().value() <= 1e-6)
+        return std::nullopt;
+
+    const cv::Matx33d cameraMatrix{
+        config.fx, 0.0, config.cx,
+        0.0, config.fy, config.cy,
+        0.0, 0.0, 1.0};
+
+    const auto& d = config.distortion;
+    const cv::Vec<double, 5> distortion{d[0], d[1], d[2], d[3], d[4]};
+
+    std::vector<cv::Point2d> pixels;
+    cv::projectPoints(
+        std::vector<cv::Point3d>{{
+            cameraPoint.X().value(),
+            cameraPoint.Y().value(),
+            cameraPoint.Z().value()}},
+        cv::Vec3d{}, cv::Vec3d{}, cameraMatrix, distortion, pixels);
+
+    if (!std::isfinite(pixels[0].x) || !std::isfinite(pixels[0].y))
+        return std::nullopt;
+    return pixels[0];
 }

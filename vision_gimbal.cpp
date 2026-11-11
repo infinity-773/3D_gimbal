@@ -18,10 +18,11 @@
 
 
 /*---------可自行添加：算法需要的头文件----------*/
-#include "SuperStructure.h"
 #include "Debouncer.h"
 #include "MathUtils.h"
 #include "PixelToWorld.h"
+#include "Model.h"
+#include "Estimator.h"
 #include <string>
 #include <vector>
 /*---------添加区域结束----------*/
@@ -192,7 +193,7 @@ struct BladeTarget
 };
 
 // 瞄准点 打完看偏哪边就往反方向挪
-static double kAimU = width * 0.5 - 30;   // （需调参）
+static double kAimU = width * 0.5;   // （需调参）
 static double kAimV = height * 0.5;   // （需调参）
 
 // 丢几帧还算有目标
@@ -200,13 +201,11 @@ static int    kHoldFrames = 8;
 
 // 像素转角度
 static double kFocalPx = 1300;     // （需调参）
+constexpr std::array<double, 5> kCamDistD{0.01986204680694741, 0.01055574619482257, -0.0002627896452722419, 9.333222065562593e-05,  -0.07626694416768789}; // 畸变系数，无量纲
 static double kYawSign = 1.0;       // 图像往右 yaw 变大填 1 变小填 -1（需调参）
 static double kPitchSign = 1.0;     // 图像往上 pitch 变大填 1 变小填 -1（需调参）
 static double kRotationYawSign = 1.0;
 static double kRotationPitchSign = 1.0;
-static double kPredictionSeconds = 0.15;
-static double kYawBias = 0.0;       // 固定的角度偏差（需调参）
-static double kPitchBias = 0.0;     // 弹道下坠 远了要加（需调参）
 static double kp = 0.6;          // PID 比例项
 static double ki = 1.6; // PID 积分项
 static double kd = 0.0; // PID 微分项
@@ -214,7 +213,7 @@ static double kIntegralLimit = 1.5; // 积分限幅，单位：度·秒
 static double kControlDeadbandPx = 2; // 小于此像素误差时停止微调，避免识别抖动
 static double kMaxStep = 4.0;       // PID 输出限幅，单位度
 // 可选 Position（绝对角度）或 Incremental（角度增量）。
-static ControlOutputMode kControlOutputMode = ControlOutputMode::Position;
+
 
 // 开火
 static double kAimTolPx = 13;         // 差多少像素算对准（需调参）
@@ -238,26 +237,10 @@ static std::chrono::steady_clock::time_point g_pushRetractStartedAt;
 
 //初始化
 Debouncer aimedDebouncer(10, DebounceEdge::Rising);
-static SuperStructureConfig makeSuperStructureConfig()
-{
-    SuperStructureConfig config;
-    config.aimU = kAimU;
-    config.aimV = kAimV;
-    config.focalLengthPx = kFocalPx;
-    config.yawSign = kYawSign;
-    config.pitchSign = kPitchSign;
-    config.yawBias = kYawBias;
-    config.pitchBias = kPitchBias;
-    config.deadbandPx = kControlDeadbandPx;
-    config.aimTolerancePx = kAimTolPx;
-    config.integralEnableOffsetPx = kIntegralEnableOffsetPx;
-    config.yawPid = PIDConfig(kp, ki, kd,
-                              -kIntegralLimit, kIntegralLimit,
-                              -kMaxStep, kMaxStep);
-    config.pitchPid = config.yawPid;
-    return config;
-}
-SuperStructure superStructure(makeSuperStructureConfig(), kControlOutputMode);
+
+static CenterEstimator estimator = CenterEstimator();
+
+static Model model = Model();
 
 static PixelToWorldConfig makePTWConfig()
 {
@@ -266,6 +249,7 @@ static PixelToWorldConfig makePTWConfig()
     config.fy = kFocalPx;
     config.cx = width * 0.5;
     config.cy = height * 0.5;
+    config.distortion = kCamDistD;
 
     // Camera optical (right, down, forward) -> gimbal (forward, left, up).
     // Translation is a placeholder: replace it with the measured camera offset.
@@ -359,6 +343,7 @@ void receiveLoop()
 
 /*---------需要编写：自己的算法函数（按需添加）----------*/
 // 在这里定义圆环识别、弹道解算等函数，再到主循环的动手区调用。
+
 
 static uint8_t updateFireControl(bool aimed, std::chrono::steady_clock::time_point now)
 {
@@ -729,8 +714,9 @@ int main()
             0.001, 0.1);
         g_lastControlAt = frameReceivedAt;
 
+        bool targetProjectionValid = false;
         frc::Translation3d targetInBase = [&]() {
-            if (!target.valid || !feedbackValid)
+            if (!target.valid)
             {
                 return frc::Translation3d{};
             }
@@ -745,70 +731,39 @@ int main()
                 return frc::Translation3d{};
             }
 
+            targetProjectionValid = true;
             return *targetInWorld;
         }();
 
         estimator.calc(targetInBase , controllerNow);
         if(estimator.getRes() < 0.05){
-          model.update(estimator.getExpCenter());
+          model.updateCenter(estimator.getExpCenter());
         }
         
-        frc::Translation3d expTarget = model.getExpCenter();
+        frc::Translation3d expTarget = model.getPhaseAtTime(0.3 , targetInBase ,true);
+
+        AxisData angles = getShootAngles(expTarget);
+        AxisData leadAngles = withLead(angles);
+
 
         sendData.Gimbal_Ctrl = 1;
-        sendData.yaw_angle = static_cast<float>(controlOutput.axis.yaw);
-        sendData.pitch_angle = static_cast<float>(controlOutput.axis.pitch);
+        sendData.yaw_angle = static_cast<float>(leadAngles.yaw);
+        sendData.pitch_angle = static_cast<float>(leadAngles.pitch);
         
    
         // 对准了就开火
         const auto now = std::chrono::steady_clock::now();
 
-        const bool targetMovedAway = 
-            std::hypot(controlOutput.targetOffsetPx.yaw,
-                       controlOutput.targetOffsetPx.pitch) > kFireRearmOffsetPx;
-        bool aimed;
-        if (targetMovedAway)
-        {
-            aimedDebouncer.reset(false);
-            aimed = false;
-        }
-        else
-        {
-            aimed = aimedDebouncer.update(superStructure.isAimed());
-        }
+        bool aimed = false;
+
         sendData.Push_flag = updateFireControl(aimed, now);
 
         // 画图
         cv::circle(image, cv::Point(static_cast<int>(kAimU), static_cast<int>(kAimV)),
                    6, cv::Scalar(0, 255, 0), 2);
-        if (prediction.valid)
-        {
-            for (std::size_t index = 1; index < prediction.trajectory.size(); ++index)
-            {
-                cv::line(image, prediction.trajectory[index - 1], prediction.trajectory[index],
-                         cv::Scalar(255, 255, 0), 2);
-            }
-            cv::drawMarker(image, prediction.center, cv::Scalar(255, 255, 0),
-                           cv::MARKER_CROSS, 14, 2);
-            cv::drawMarker(image, prediction.predicted, cv::Scalar(255, 0, 255),
-                           cv::MARKER_CROSS, 20, 2);
-            cv::putText(image,
-                        cv::format("phase=%.1f deg speed=%.1f deg/s dt=%.3fs",
-                                   prediction.phase * 180.0 / CV_PI,
-                                   prediction.angularVelocity * 180.0 / CV_PI,
-                                   kPredictionSeconds),
-                        cv::Point(10, 180), cv::FONT_HERSHEY_SIMPLEX, 0.55,
-                        cv::Scalar(255, 255, 0), 1);
-        }
-        else
-        {
-            cv::putText(image, "TRACK: waiting for valid trajectory",
-                        cv::Point(10, 180), cv::FONT_HERSHEY_SIMPLEX, 0.55,
-                        cv::Scalar(0, 165, 255), 1);
-        }
         if (target.valid)
         {
-            const cv::Point center(static_cast<int>(target.center.x),
+            const cv::Point targetcenter(static_cast<int>(target.center.x),
                                    static_cast<int>(target.center.y));
             cv::Scalar color;
             if (aimed == true)
@@ -819,21 +774,54 @@ int main()
             {
                 color = cv::Scalar(0, 0, 255);
             }
-            cv::circle(image, center, static_cast<int>(target.radius), color, 2);
-            cv::line(image, center,
+            cv::circle(image, targetcenter, static_cast<int>(target.radius), color, 2);
+            cv::line(image, targetcenter,
                      cv::Point(static_cast<int>(kAimU), static_cast<int>(kAimV)),
                      cv::Scalar(0, 255, 255), 1);
             cv::putText(image,
-                        "du=" + std::to_string(
-                            static_cast<int>(controlOutput.targetOffsetPx.yaw)) +
-                            " dv=" + std::to_string(
-                            static_cast<int>(controlOutput.targetOffsetPx.pitch)) +
-                            " yaw=" + std::to_string(
-                            static_cast<int>(controlOutput.targetAngleError.yaw)) +
-                            " pitch=" + std::to_string(
-                            static_cast<int>(controlOutput.targetAngleError.pitch)),
+                        "tgtyaw=" + std::to_string(
+                            static_cast<int>(angles.yaw)) +
+                            " tgtpitch=" + std::to_string(
+                            static_cast<int>(angles.pitch)) +
+                            " leadyaw=" + std::to_string(
+                            static_cast<int>(leadAngles.yaw)) +
+                            " leadpitch=" + std::to_string(
+                            static_cast<int>(leadAngles.pitch)),
                         cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7,
                         cv::Scalar(0, 255, 255), 2);
+
+        //轨迹圆 && 目标点
+            const auto center = estimator.getExpCenter();
+            const GimbalAngles angles{
+            units::degree_t{feedback.pitch_angle},
+                units::degree_t{feedback.yaw_angle}};
+
+            if (targetProjectionValid)
+            {
+                const auto predictedPixel = pixelToWorld.worldToPixel(expTarget, angles);
+
+                const cv::Point predictedPoint(cvRound(predictedPixel->x),
+                                                   cvRound(predictedPixel->y));
+                cv::drawMarker(image, predictedPoint, cv::Scalar(255, 0, 255),
+                                   cv::MARKER_CROSS, 20, 2);
+                cv::putText(image, "PRED", predictedPoint + cv::Point(14, -12),
+                                cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(255, 0, 255), 1);
+                
+            }
+
+            const frc::Translation3d edge{
+            center.X().value(),
+            center.Y().value() + model.getRadius(),
+                center.Z().value()};
+
+            const auto centerPixel = pixelToWorld.worldToPixel(center, angles);
+            const auto edgePixel = pixelToWorld.worldToPixel(edge, angles);
+
+            if (centerPixel && edgePixel)
+            {
+                const int radiusPx = cvRound(cv::norm(*edgePixel - *centerPixel));
+                cv::circle(image, *centerPixel, radiusPx, cv::Scalar(255, 255, 0), 2);
+            }
         }
         else
         {
@@ -865,9 +853,9 @@ int main()
                     feedbackValid ? cv::Scalar(255, 255, 255)
                                   : (feedbackReceived ? cv::Scalar(0, 165, 255)
                                                       : cv::Scalar(0, 0, 255)), 2);
-        cv::putText(image, std::string("state=") + superStructure.getstateName(),
-                    cv::Point(10, 150), cv::FONT_HERSHEY_SIMPLEX, 0.65,
-                    cv::Scalar(255, 255, 255), 2);
+        //cv::putText(image, std::string("state=") + superStructure.getstateName(),
+        //            cv::Point(10, 150), cv::FONT_HERSHEY_SIMPLEX, 0.65,
+        //            cv::Scalar(255, 255, 255), 2);
         cv::putText(image, std::string("color: ") + targetColorName(),
                     cv::Point(10, 90), cv::FONT_HERSHEY_SIMPLEX, 0.55,
                     cv::Scalar(255, 255, 0), 1);
@@ -918,11 +906,7 @@ int main()
             }
             cv::putText(image,
                         "fps=" + std::to_string(static_cast<int>(fps + 0.5)) +
-                            "  rings=" + std::to_string(static_cast<int>(rings.size())) +
-                            "  off=" + std::to_string(static_cast<int>(
-                                controlOutput.targetOffsetPx.yaw)) + "," +
-                            std::to_string(static_cast<int>(
-                                controlOutput.targetOffsetPx.pitch)),
+                            "  rings=" + std::to_string(static_cast<int>(rings.size())),
                         cv::Point(10, image.rows - 14), cv::FONT_HERSHEY_SIMPLEX, 0.5,
                         cv::Scalar(255, 255, 255), 1);
 
