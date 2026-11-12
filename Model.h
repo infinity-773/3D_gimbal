@@ -18,7 +18,7 @@ using Transform3d = turret_kinematics::Transform3d;
 class Model {
 public:
     Model(double distance = 2.0, double radius = 0.270): 
-        center{distance, 0.0, 0.0}, r{radius}, omega{PI/6} {}
+        center{distance, -0.1, 0.200}, r{radius}, omega{PI/3} {}
 
     frc::Translation3d getPhaseAtTime(double dt , frc::Translation3d const& currTarget ,bool Anti){
         const double dy = currTarget.Y().value() - center.Y().value();

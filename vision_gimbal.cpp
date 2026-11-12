@@ -79,7 +79,7 @@ int serialBaudRate = 230400;
 // 缓冲帧数
 // 范围：OpenCV 后端允许 1～10 帧，默认 4；实际分配受驱动限制。
 // 作用：设为 1 可以减少排队的旧画面。
-// 注意：缓冲不是图像控制项，不能用 --list-ctrls 查询范围。
+// 注意：缓冲不是图像控制项，不能用 --list-ctrls 查询范围。1.0
 int cameraBufferSize = 6;
 
 
@@ -179,8 +179,8 @@ static cv::Scalar red_ranges_low[2]  = {cv::Scalar(0, 110, 137),   cv::Scalar(11
 static cv::Scalar red_ranges_high[2] = {cv::Scalar(168, 110, 137), cv::Scalar(179, 255, 255)};   // 
 
 // 蓝色一段
-static cv::Scalar blue_low  = cv::Scalar(100, 120, 80);   // 
-static cv::Scalar blue_high = cv::Scalar(130, 255, 255);   // 
+static cv::Scalar blue_low  = cv::Scalar(100, 180, 200);   // 
+static cv::Scalar blue_high = cv::Scalar(120, 255, 255);   // 
 
 // 识别到的目标
 struct BladeTarget
@@ -208,7 +208,7 @@ static double kRotationYawSign = 1.0;
 static double kRotationPitchSign = 1.0;
 
 // 开火
-static double kTolIndeg = 4;
+static double kTolIndeg = 1.9; // 绝对角度误差容忍范围
 static int kPushRetractMs = 200; // 推杆回缩脉冲时长
 static double kCommandSlewRateDegPerSec = 15; // 绝对角度指令最大变化速度
 static double kAimTolPx = 20.0;
@@ -230,10 +230,10 @@ bool useOmega = true; // 是否使用模型预测
 
 
 //初始化
-Debouncer aimedDebouncer(50, DebounceEdge::Rising);
-Debouncer modelLockDebouncer(50, DebounceEdge::Rising);
+Debouncer aimedDebouncer(30, DebounceEdge::Rising);
+Debouncer modelLockDebouncer(55, DebounceEdge::Rising);
 static Model model = Model(2.0 , 0.215);
-static CenterEstimator estimator = CenterEstimator(frc::Translation3d{2.0 , 0.0 , 0.275}, model.getRadius());
+static CenterEstimator estimator = CenterEstimator(frc::Translation3d{2.0 , -0.05 , 0.130}, model.getRadius());
 
 
 
@@ -698,7 +698,6 @@ int main()
         /*---------需要编写：图像识别、控制计算和发送数据----------*/
         // 输入：image 是当前图像；feedback 是角度反馈，仅 feedbackValid 为 true 时可用。
         // 输出：修改 sendData 的字段；不用自己调用串口发送函数。
-
         // 控制量由 SuperStructure 状态机根据输出模式填写。
         sendData.Gimbal_Ctrl = 1;          // 2：增量控制；1：绝对角度控制。
         sendData.pitch_delta_angle = 0.0F;
@@ -707,7 +706,7 @@ int main()
         sendData.pitch_angle = feedback.pitch_angle;
         sendData.yaw_angle = feedback.yaw_angle;
         // 当前固定协议：左右摩擦轮目标速度、蜂鸣器和推杆标志。
-        sendData.left_speed = 1;
+        sendData.left_speed = 600;
         sendData.right_speed = 600;
         sendData.buzzer = 0;
         sendData.Push_flag = 1;
@@ -729,6 +728,7 @@ int main()
         g_lastControlAt = frameReceivedAt;
 
         bool targetProjectionValid = false;
+
         frc::Translation3d targetInBase = [&]() {
             if (!target.valid || !feedbackValid)
             {
@@ -763,7 +763,7 @@ int main()
             const bool modelFitReady =
                 estimator.hasEnoughSamples() &&
                 std::isfinite(estimator.getRes()) &&
-                estimator.getRes() < 0.00115;
+                estimator.getRes() < 0.0012;
 
             if (!g_modelLocked &&
                 modelLockDebouncer.update(modelFitReady))
@@ -774,10 +774,10 @@ int main()
             }
         }
         
-        frc::Translation3d expTarget = model.getPhaseAtTime(0.3 , targetInBase ,true);
+        frc::Translation3d expTarget = model.getPhaseAtTime(0.35 , targetInBase ,true);
         model.updateOmega(std::numbers::pi / 3);
         AxisData angles = getShootAngles(expTarget);
-        AxisData leadAngles = withLead(angles , -0.5);
+        AxisData leadAngles = withLead(angles , -1 , -1);
 
 
         sendData.Gimbal_Ctrl = 1;
@@ -909,6 +909,19 @@ int main()
             : "feedback not received";
         cv::putText(image, feedbackText, cv::Point(10, 120),
                     cv::FONT_HERSHEY_SIMPLEX, 0.65,
+                    feedbackValid ? cv::Scalar(255, 255, 255)
+                                  : (feedbackReceived ? cv::Scalar(0, 165, 255)
+                                                      : cv::Scalar(0, 0, 255)), 2);
+        const std::string frictionSpeedText =
+            "friction cmd L=" + std::to_string(sendData.left_speed) +
+            " R=" + std::to_string(sendData.right_speed) + " | feedback ";
+        const std::string frictionFeedbackText = feedbackReceived
+            ? "L=" + std::to_string(feedback.left_speed) +
+                  " R=" + std::to_string(feedback.right_speed) +
+                  (feedbackValid ? "" : " (stale)")
+            : "not received";
+        cv::putText(image, frictionSpeedText + frictionFeedbackText,
+                    cv::Point(10, 180), cv::FONT_HERSHEY_SIMPLEX, 0.55,
                     feedbackValid ? cv::Scalar(255, 255, 255)
                                   : (feedbackReceived ? cv::Scalar(0, 165, 255)
                                                       : cv::Scalar(0, 0, 255)), 2);

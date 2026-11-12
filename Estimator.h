@@ -21,8 +21,8 @@ public:
     periorData(perior),
     expectedCenter(periorData),
     res(std::numeric_limits<double>::infinity()),
-    lambda(0.33),
-    huber(0.05),
+    lambda(0.4),
+    huber(0.08),
     radius(r) {};
 
     void calc(frc::Translation3d targetInBase , double now){
@@ -72,7 +72,7 @@ public:
                 double dy = targets[p].Y().value() - expectedCenter.Y().value();
                 double dist = std::sqrt(dz * dz + dy * dy);
                 //点的残差
-                if (dist < 1e-9 ) {dist = 1e-9;}
+                if (dist < 1e-12 ) {dist = 1e-12;}
                 const double residual = dist - radius;
                 //该点权重开根号
                 const double residualMagnitude = std::abs(residual);
