@@ -712,7 +712,6 @@ int main()
         sendData.Push_flag = 1;
 
         // 从这里往下写自己的代码：
-        // 检测目标并交给状态机；PID 和位置/增量输出均由状态机负责。
 
         // 找环
         cv::Mat mask;

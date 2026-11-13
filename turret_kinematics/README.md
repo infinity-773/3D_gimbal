@@ -5,6 +5,7 @@ A small, standalone C++20 header-only package for 3D coordinates, frame transfor
 ## Contents
 
 - `include/turret_kinematics/Translation3d.h`: 3D position/vector operations.
+- `include/turret_kinematics/Translation2d.h` and `Rotation2d.h`: 2D translation and angle operations, following WPILib's geometry API.
 - `include/turret_kinematics/Quaternion.h`: quaternion operations.
 - `include/turret_kinematics/Rotation3d.h`: 3D orientation and rotation operations.
 - `include/turret_kinematics/Transform3d.h`: relative coordinate transforms.
@@ -92,3 +93,5 @@ ctest --test-dir build --output-on-failure
 To use it in another CMake project, add this directory with `add_subdirectory(...)` and link the `turret_kinematics` interface target. Without CMake, add `include/` to the compiler include paths.
 
 The solution angles follow the frame convention above, not necessarily calibrated servo commands. Apply your turret's zero offsets, direction signs, travel limits, and coordinate-frame calibration before commanding hardware. Geometry methods use WPILib-style names such as `X()`, `Norm()`, `RotateBy()`, `TransformBy()`, and `RelativeTo()`. Include `units::literals` to use suffixes such as `_m`, `_deg`, `_mps`, and `_ms`; alternatively construct a value directly, such as `units::meter_t{1.5}`.
+
+`Translation2d::Angle()` returns an optional `Rotation2d`; it is empty for a near-zero vector because its direction is undefined. The API follows WPILib's C++ [`Translation2d`](https://github.com/wpilibsuite/allwpilib/blob/main/wpimath/src/main/native/include/wpi/math/geometry/Translation2d.hpp) conventions. Eigen-specific vector conversion is omitted to keep this library dependency-free.

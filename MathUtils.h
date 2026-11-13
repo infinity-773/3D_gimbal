@@ -28,6 +28,7 @@ inline AxisData getShootAngles(const frc::Translation3d& targetInBase)
     return AxisData{yawDeg, pitchDeg};
 }
 
+
 inline AxisData withLead(const AxisData& data , double yawlead , double pitchlead){
     return AxisData{data.yaw - yawlead, data.pitch - pitchlead};
 }

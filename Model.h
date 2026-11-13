@@ -2,12 +2,15 @@
 #define MODEL_H
 #include "gcem.hpp"
 #include <turret_kinematics/Pose3d.h>
+#include <turret_kinematics/Translation2d.h>
 #include <cmath>
 
 #define PI 3.14159265358979323846
 
 namespace frc {
+using Translation2d = turret_kinematics::Translation2d;
 using Translation3d = turret_kinematics::Translation3d;
+using Rotation2d = turret_kinematics::Rotation2d;
 using Rotation3d = turret_kinematics::Rotation3d;
 using Transform3d = turret_kinematics::Transform3d;
 }
@@ -33,6 +36,21 @@ public:
             currTarget.X().value(),
             center.Y().value() + rotatedY,
             center.Z().value() + rotatedZ
+        };
+    };
+
+    frc::Translation3d buildPointByR(frc::Translation3d const& currTarget){
+        //取出当前目标点在Y-Z平面上的坐标,角度
+        const frc::Translation2d center = frc::Translation2d {this->center.Y().value(), this->center.Z().value()};
+        const frc::Translation2d target = frc::Translation2d{currTarget.Y().value(), currTarget.Z().value()};
+        frc::Translation2d targetInCenter = target - center;
+        //限制norm，排除径向噪声
+        targetInCenter = targetInCenter * (r / targetInCenter.Norm().value());
+
+        return frc::Translation3d{
+            currTarget.X().value(),
+            center.X().value() + targetInCenter.X().value(),
+            center.Y().value() + targetInCenter.Y().value()
         };
     };
 
@@ -69,6 +87,8 @@ private:
     double omega;
     double r;
     double time = 0;
+
+    units::degree_t offset = 0.0_deg;
 
 
     const frc::Translation3d camInBase{0.00934 , 0 , 0.1102};
