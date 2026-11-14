@@ -146,7 +146,7 @@ int cameraWhiteBalance = 4600;
 // 锐度
 // 范围：0～100，步长 1，默认 80。
 // 作用：增强边缘；过大可能放大噪点、产生假边缘。
-int cameraSharpness = 100;
+int cameraSharpness = 100; 
 
 
 // 以上是驱动声明的范围，未逐项实测效果。
