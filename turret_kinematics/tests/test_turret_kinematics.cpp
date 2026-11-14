@@ -10,7 +10,9 @@
 #include "frc/estimator/KalmanFilter.h"
 
 using turret_kinematics::Pose3d;
+using turret_kinematics::Rotation2d;
 using turret_kinematics::Rotation3d;
+using turret_kinematics::Translation2d;
 using turret_kinematics::Translation3d;
 using turret_kinematics::Transform3d;
 
@@ -20,6 +22,16 @@ int main() {
   const auto cross =
     Translation3d{1.0, 0.0, 0.0}.Cross({0.0, 1.0, 0.0});
   assert(std::abs(cross[2].value() - 1.0) < 1e-9);
+
+  const Translation2d diagonal{1.0, 1.0};
+  assert(std::abs(diagonal.Norm().value() - std::sqrt(2.0)) < 1e-9);
+  assert(diagonal.Angle().has_value());
+  assert(std::abs(diagonal.Angle()->Degrees().value() - 45.0) < 1e-9);
+  assert(!Translation2d{}.Angle().has_value());
+  const auto rotated2d =
+      Translation2d{2.0, 0.0}.RotateBy(Rotation2d{units::degree_t{90.0}});
+  assert(std::abs(rotated2d.X().value()) < 1e-9);
+  assert(std::abs(rotated2d.Y().value() - 2.0) < 1e-9);
 
   const Translation3d inchPosition{12_in, 0_m, 0_m};
   assert(std::abs(inchPosition.X().value() - 0.3048) < 1e-9);

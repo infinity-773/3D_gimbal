@@ -79,8 +79,8 @@ int serialBaudRate = 230400;
 // 缓冲帧数
 // 范围：OpenCV 后端允许 1～10 帧，默认 4；实际分配受驱动限制。
 // 作用：设为 1 可以减少排队的旧画面。
-// 注意：缓冲不是图像控制项，不能用 --list-ctrls 查询范围。
-int cameraBufferSize = 0;
+// 注意：缓冲不是图像控制项，不能用 --list-ctrls 查询范围。1.0
+int cameraBufferSize = 6;
 
 
 // 【曝光与亮度】
@@ -95,12 +95,12 @@ int cameraAutoExposure = 1;
 // 单位：100 us，即 19 = 1.9 ms，166 = 16.6 ms。
 // 实际时间范围：0.1～1000 ms。
 // 作用：增大通常更亮，但运动拖影更明显，过长还可能降低实际帧率。
-int cameraExposure = 10;
+int cameraExposure = 9;
 
 // 亮度
 // 范围：-64～64，步长 1，默认 0。
 // 作用：调整画面整体明暗。
-int cameraBrightness = 10;
+int cameraBrightness = 9;
 
 // 对比度
 // 范围：0～100，步长 1，默认 35。
@@ -179,8 +179,8 @@ static cv::Scalar red_ranges_low[2]  = {cv::Scalar(0, 110, 137),   cv::Scalar(11
 static cv::Scalar red_ranges_high[2] = {cv::Scalar(168, 110, 137), cv::Scalar(179, 255, 255)};   // 
 
 // 蓝色一段
-static cv::Scalar blue_low  = cv::Scalar(100, 120, 80);   // 
-static cv::Scalar blue_high = cv::Scalar(130, 255, 255);   // 
+static cv::Scalar blue_low  = cv::Scalar(100, 180, 200);   // 
+static cv::Scalar blue_high = cv::Scalar(120, 255, 255);   // 
 
 // 识别到的目标
 struct BladeTarget
@@ -206,20 +206,10 @@ static double kYawSign = 1.0;       // 图像往右 yaw 变大填 1 变小填 -1
 static double kPitchSign = 1.0;     // 图像往上 pitch 变大填 1 变小填 -1（需调参）
 static double kRotationYawSign = 1.0;
 static double kRotationPitchSign = 1.0;
-static double kp = 0.6;          // PID 比例项
-static double ki = 1.6; // PID 积分项
-static double kd = 0.0; // PID 微分项
-static double kIntegralLimit = 1.5; // 积分限幅，单位：度·秒
-static double kControlDeadbandPx = 2; // 小于此像素误差时停止微调，避免识别抖动
-static double kMaxStep = 4.0;       // PID 输出限幅，单位度
-// 可选 Position（绝对角度）或 Incremental（角度增量）。
-
 
 // 开火
-static double kTolIndeg = 5;
+static double kTolIndeg = 1.9; // 绝对角度误差容忍范围
 static int kPushRetractMs = 200; // 推杆回缩脉冲时长
-static double kIntegralEnableOffsetPx = 40.0; // 目标距中心不超过此值时启用积分
-static double kFireRearmOffsetPx = 50.0; // 目标偏离中心超过此值时重新允许开火
 static double kCommandSlewRateDegPerSec = 15; // 绝对角度指令最大变化速度
 static double kAimTolPx = 20.0;
 
@@ -227,8 +217,8 @@ static double kAimTolPx = 20.0;
 static int  g_shotsFired = 0;
 static bool g_pushRetracting = false;
 static std::chrono::steady_clock::time_point g_pushRetractStartedAt;
-static bool g_aimedRaw = false;
 static bool g_aimedStable = false;
+static bool g_fireArmed = true;
 static int  g_frameIndex = 0;
 static std::chrono::steady_clock::time_point g_lastControlAt;
 static bool g_modelLocked = false;
@@ -236,12 +226,14 @@ static bool g_commandInitialized = false;
 static double g_commandYaw = 0.0;
 static double g_commandPitch = 0.0;
 
+bool useOmega = true; // 是否使用模型预测
+
 
 //初始化
-Debouncer aimedDebouncer(10, DebounceEdge::Rising);
-Debouncer modelLockDebouncer(15, DebounceEdge::Rising);
-static Model model = Model(2.0 , 0.210);
-static CenterEstimator estimator = CenterEstimator(frc::Translation3d{2.0 , 0.0 , 0.270}, model.getRadius());
+Debouncer aimedDebouncer(30, DebounceEdge::Rising);
+Debouncer modelLockDebouncer(55, DebounceEdge::Rising);
+static Model model = Model(2.0 , 0.215);
+static CenterEstimator estimator = CenterEstimator(frc::Translation3d{2.0 , -0.05 , 0.130}, model.getRadius());
 
 
 
@@ -363,21 +355,25 @@ static uint8_t updateFireControl(bool targetValid,
 
     if (!validAimData)
     {
-        g_aimedRaw = false;
         g_aimedStable = false;
-
+        aimedDebouncer.reset(false);
     }
     else
     {
         const double yawError = desiredAngles.yaw - static_cast<double>(feedback.yaw_angle);
         const double pitchError = desiredAngles.pitch - static_cast<double>(feedback.pitch_angle);
-        g_aimedRaw = ifInTol(static_cast<float>(yawError), static_cast<float>(pitchError));
-        g_aimedStable = aimedDebouncer.update(g_aimedRaw);
-
+        g_aimedStable = ifInTol(static_cast<float>(yawError), static_cast<float>(pitchError));
+        g_aimedStable = aimedDebouncer.update(g_aimedStable);
     }
 
-    if (kEnableFire && g_aimedStable)
+    if (!g_aimedStable)
     {
+        g_fireArmed = true;
+    }
+
+    if (kEnableFire && g_aimedStable && g_fireArmed && !g_pushRetracting)
+    {
+        g_fireArmed = false;
         g_pushRetracting = true;
         g_pushRetractStartedAt = now;
         ++g_shotsFired;
@@ -702,7 +698,6 @@ int main()
         /*---------需要编写：图像识别、控制计算和发送数据----------*/
         // 输入：image 是当前图像；feedback 是角度反馈，仅 feedbackValid 为 true 时可用。
         // 输出：修改 sendData 的字段；不用自己调用串口发送函数。
-
         // 控制量由 SuperStructure 状态机根据输出模式填写。
         sendData.Gimbal_Ctrl = 1;          // 2：增量控制；1：绝对角度控制。
         sendData.pitch_delta_angle = 0.0F;
@@ -711,13 +706,12 @@ int main()
         sendData.pitch_angle = feedback.pitch_angle;
         sendData.yaw_angle = feedback.yaw_angle;
         // 当前固定协议：左右摩擦轮目标速度、蜂鸣器和推杆标志。
-        sendData.left_speed = 660;
-        sendData.right_speed = 660;
+        sendData.left_speed = 600;
+        sendData.right_speed = 600;
         sendData.buzzer = 0;
         sendData.Push_flag = 1;
 
         // 从这里往下写自己的代码：
-        // 检测目标并交给状态机；PID 和位置/增量输出均由状态机负责。
 
         // 找环
         cv::Mat mask;
@@ -733,6 +727,7 @@ int main()
         g_lastControlAt = frameReceivedAt;
 
         bool targetProjectionValid = false;
+
         frc::Translation3d targetInBase = [&]() {
             if (!target.valid || !feedbackValid)
             {
@@ -767,7 +762,7 @@ int main()
             const bool modelFitReady =
                 estimator.hasEnoughSamples() &&
                 std::isfinite(estimator.getRes()) &&
-                estimator.getRes() < 0.002;
+                estimator.getRes() < 0.0012;
 
             if (!g_modelLocked &&
                 modelLockDebouncer.update(modelFitReady))
@@ -778,14 +773,16 @@ int main()
             }
         }
         
-        frc::Translation3d expTarget = model.getPhaseAtTime(0.8 , targetInBase ,true);
-        model.updateOmega(std::numbers::pi / 6);
+        frc::Translation3d expTarget = model.getPhaseAtTime(0.35 , targetInBase ,true);
+        model.updateOmega(std::numbers::pi / 3);
         AxisData angles = getShootAngles(expTarget);
-        AxisData leadAngles = withLead(angles , -0.1);
+        AxisData leadAngles = withLead(angles , -1 , -1);
 
 
         sendData.Gimbal_Ctrl = 1;
-        if (g_modelLocked && targetProjectionValid &&
+        const bool aimTargetValid =
+            targetProjectionValid && (!useOmega || g_modelLocked);
+        if (aimTargetValid &&
             std::isfinite(leadAngles.yaw) && std::isfinite(leadAngles.pitch))
         {
             if (!g_commandInitialized)
@@ -803,13 +800,13 @@ int main()
             g_commandPitch += clampValue(
                 leadAngles.pitch - g_commandPitch,
                 -maxCommandStep, maxCommandStep);
-
+    
             sendData.yaw_angle = static_cast<float>(g_commandYaw);
             sendData.pitch_angle = static_cast<float>(g_commandPitch);
         }
 
         sendData.Push_flag = updateFireControl(
-            g_modelLocked && targetProjectionValid,
+            aimTargetValid,
             feedbackValid,
             leadAngles,
             feedback,
@@ -911,6 +908,19 @@ int main()
             : "feedback not received";
         cv::putText(image, feedbackText, cv::Point(10, 120),
                     cv::FONT_HERSHEY_SIMPLEX, 0.65,
+                    feedbackValid ? cv::Scalar(255, 255, 255)
+                                  : (feedbackReceived ? cv::Scalar(0, 165, 255)
+                                                      : cv::Scalar(0, 0, 255)), 2);
+        const std::string frictionSpeedText =
+            "friction cmd L=" + std::to_string(sendData.left_speed) +
+            " R=" + std::to_string(sendData.right_speed) + " | feedback ";
+        const std::string frictionFeedbackText = feedbackReceived
+            ? "L=" + std::to_string(feedback.left_speed) +
+                  " R=" + std::to_string(feedback.right_speed) +
+                  (feedbackValid ? "" : " (stale)")
+            : "not received";
+        cv::putText(image, frictionSpeedText + frictionFeedbackText,
+                    cv::Point(10, 180), cv::FONT_HERSHEY_SIMPLEX, 0.55,
                     feedbackValid ? cv::Scalar(255, 255, 255)
                                   : (feedbackReceived ? cv::Scalar(0, 165, 255)
                                                       : cv::Scalar(0, 0, 255)), 2);

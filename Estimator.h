@@ -21,8 +21,8 @@ public:
     periorData(perior),
     expectedCenter(periorData),
     res(std::numeric_limits<double>::infinity()),
-    lambda(0.5),
-    huber(0.05),
+    lambda(0.4),
+    huber(0.08),
     radius(r) {};
 
     void calc(frc::Translation3d targetInBase , double now){
@@ -45,7 +45,7 @@ public:
         targets
         .push_back(targetInBase);
         
-        if (targets.size() < 3)
+        if (targets.size() < 5)
         {
             res = std::numeric_limits<double>::infinity();
             return;
@@ -72,7 +72,7 @@ public:
                 double dy = targets[p].Y().value() - expectedCenter.Y().value();
                 double dist = std::sqrt(dz * dz + dy * dy);
                 //点的残差
-                if (dist < 1e-9 ) {dist = 1e-9;}
+                if (dist < 1e-12 ) {dist = 1e-12;}
                 const double residual = dist - radius;
                 //该点权重开根号
                 const double residualMagnitude = std::abs(residual);
@@ -125,7 +125,7 @@ public:
             };
             //Δ小于阈值，结束本周期迭代
             
-            if(std::hypot(boundedDeltaY, boundedDeltaZ) < 1e-7) break;
+            if(std::hypot(boundedDeltaY, boundedDeltaZ) < 1e-8) break;
         }
 
         double squaredResidualSum = 0.0;
@@ -150,7 +150,7 @@ public:
     }
 
     bool hasEnoughSamples() const {
-        return targets.size() >= 3;
+        return targets.size() >= 5;
     }
 
     void reset()
@@ -166,8 +166,8 @@ private:
     std::deque<frc::Translation3d> targets;
     frc::Translation3d expectedCenter;
     double res = 10; //几何残差
-    double lambda = 0.3;
-    double huber = 0.05;
+    double lambda = 0.33;
+    double huber = 0.1;
     double radius = 0.0;
 
 };
