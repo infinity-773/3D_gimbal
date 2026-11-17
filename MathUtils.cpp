@@ -27,7 +27,5 @@ double pixelToAngle(double pixels, double focalLengthPx)
     {
         throw std::invalid_argument("pixelToAngle requires finite pixels and positive focal length");
     }
-
-    constexpr double kRadiansToDegrees = 180.0 / 3.14159265358979323846;
-    return std::atan(pixels / focalLengthPx) * kRadiansToDegrees;
+    return std::atan(pixels / focalLengthPx) * radToDeg;
 }

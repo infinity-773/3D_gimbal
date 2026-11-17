@@ -6,6 +6,9 @@
 #include <cmath>
 #include <numbers>
 
+
+const static double radToDeg = 180.0 / std::numbers::pi;
+
 double clampValue(double value, double low, double high);
 double pixelToAngle(double pixels, double focalLengthPx);
 
@@ -19,8 +22,6 @@ inline AxisData getShootAngles(const frc::Translation3d& targetInBase)
     const double x = targetInBase.X().value();
     const double y = targetInBase.Y().value();
     const double z = targetInBase.Z().value();
-
-        constexpr double radToDeg = 180.0 / std::numbers::pi;
 
     const double yawDeg = std::atan2(y, x) * radToDeg;
     const double pitchDeg = -std::atan2(z, std::hypot(x, y)) * radToDeg;

@@ -15,14 +15,15 @@
 #include <mutex>
 #include <thread>
 #include <atomic>
+#include <constants.h>
 class CenterEstimator {
 public:
     CenterEstimator( frc ::Translation3d perior ,double r):
     periorData(perior),
     expectedCenter(periorData),
     res(std::numeric_limits<double>::infinity()),
-    lambda(0.4),
-    huber(0.08),
+    lambda(kLAMBDA),
+    huber(kHUBER),
     radius(r) {};
 
     void calc(frc::Translation3d targetInBase , double now){
@@ -162,13 +163,13 @@ public:
 
 
 private:
-    frc::Translation3d periorData{frc::Translation3d{2.0 , -0.07 , 0.275}};
+    frc::Translation3d periorData;
     std::deque<frc::Translation3d> targets;
     frc::Translation3d expectedCenter;
     double res = 10; //几何残差
-    double lambda = 0.33;
-    double huber = 0.1;
-    double radius = 0.0;
+    double lambda ;
+    double huber ;
+    double radius ;
 
 };
 

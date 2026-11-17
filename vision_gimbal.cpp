@@ -20,11 +20,13 @@
 /*---------可自行添加：算法需要的头文件----------*/
 #include "Debouncer.h"
 #include "MathUtils.h"
-#include "PixelToWorld.h"
+#include "CameraProjection.h"
 #include "Model.h"
 #include "Estimator.h"
 #include <string>
 #include <vector>
+#include <constants.h>
+#include <RingDetector.h>
 /*---------添加区域结束----------*/
 
 
@@ -162,56 +164,18 @@ int cameraSharpness = 100;
 static bool kShowDebug = true;    // 调试窗口 按 d 关
 static bool kEnableFire = false;  // 开火总开关 调参时一定关着
 
-// 形态学核
-static cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
 
-// 颜色 
-enum class TargetColor
-{
-    Red,
-    Blue,
-    Any
-};
-static TargetColor kTargetColor = TargetColor::Any;   // 
 
-// 红色 H 跨两头 分两段
-static cv::Scalar red_ranges_low[2]  = {cv::Scalar(0, 110, 137),   cv::Scalar(11, 255, 255)};   // 
-static cv::Scalar red_ranges_high[2] = {cv::Scalar(168, 110, 137), cv::Scalar(179, 255, 255)};   // 
+// 瞄准点
+static double kAimU = width * 0.5;  
+static double kAimV = height * 0.5;  
 
-// 蓝色一段
-static cv::Scalar blue_low  = cv::Scalar(100, 180, 200);   // 
-static cv::Scalar blue_high = cv::Scalar(120, 255, 255);   // 
-
-// 识别到的目标
-struct BladeTarget
-{
-    cv::Point2f center;          // 框中心
-    cv::Rect box;                 // 选中的框
-    float radius = 0.0F;         // 框长边的一半
-    double score = 0.0;          // 框的面积 调试用
-    bool valid = false;          // 这帧有没有找到
-};
-
-// 瞄准点 打完看偏哪边就往反方向挪
-static double kAimU = width * 0.5;   // （需调参）
-static double kAimV = height * 0.5;   // （需调参）
-
-// 丢几帧还算有目标
-static int    kHoldFrames = 8;
-
-// 像素转角度
-static double kFocalPx = 1300;     // （需调参）
-constexpr std::array<double, 5> kCamDistD{0.01986204680694741, 0.01055574619482257, -0.0002627896452722419, 9.333222065562593e-05,  -0.07626694416768789}; // 畸变系数，无量纲
 static double kYawSign = 1.0;       // 图像往右 yaw 变大填 1 变小填 -1（需调参）
 static double kPitchSign = 1.0;     // 图像往上 pitch 变大填 1 变小填 -1（需调参）
 static double kRotationYawSign = 1.0;
 static double kRotationPitchSign = 1.0;
 
-// 开火
-static double kTolIndeg = 1.9; // 绝对角度误差容忍范围
-static int kPushRetractMs = 200; // 推杆回缩脉冲时长
-static double kCommandSlewRateDegPerSec = 15; // 绝对角度指令最大变化速度
-static double kAimTolPx = 20.0;
+static double kAimTolPx = 20.0; // 只用于画图
 
 // 跨帧要记住的
 static int  g_shotsFired = 0;
@@ -230,26 +194,25 @@ bool useOmega = true; // 是否使用模型预测
 
 
 //初始化
-Debouncer aimedDebouncer(30, DebounceEdge::Rising);
-Debouncer modelLockDebouncer(55, DebounceEdge::Rising);
-static Model model = Model(2.0 , 0.215);
-static CenterEstimator estimator = CenterEstimator(frc::Translation3d{2.0 , -0.05 , 0.130}, model.getRadius());
+Debouncer aimedDebouncer(kAIM_STABLE_FRAMES, DebounceEdge::Rising);
+Debouncer modelLockDebouncer(kMODEL_STABLE_FRAMES, DebounceEdge::Rising);
+static Model model = Model(kCENTER_IN_BASE , kTRAJECTORY_RADIUS , kOMEGA);
+static CenterEstimator estimator = CenterEstimator(kCENTER_IN_BASE, model.getRadius());
 
 
 
-static PixelToWorldConfig makePTWConfig()
+static CameraProjectionConfig makeProjectionConfig()
 {
-    PixelToWorldConfig config;
+    CameraProjectionConfig config;
     config.fx = kFocalPx;
     config.fy = kFocalPx;
     config.cx = kAimU;
     config.cy = kAimV;
     config.distortion = kCamDistD;
 
-    // Camera optical (right, down, forward) -> gimbal (forward, left, up).
-    // Translation is a placeholder: replace it with the measured camera offset.
-    config.cameraInGimbal = turret_kinematics::Transform3d{
-        turret_kinematics::Translation3d{0.0, 0.0, 0.0},
+    // Gimbal (forward, left, up) -> camera optical (right, down, forward).
+    config.gimbalToCamera = turret_kinematics::Transform3d{
+        kCAM_IN_BASE,
         turret_kinematics::Rotation3d::FromDegrees(-90.0, 0.0, -90.0)};
 
     // World origin is defined at the gimbal rotation center.
@@ -259,12 +222,14 @@ static PixelToWorldConfig makePTWConfig()
     config.targetPlaneNormalWorld = {1.0, 0.0, 0.0};
     config.targetPlanePointWorld = {2.0, 0.0, 0.0};
 
+    config.yawOffset = units::degree_t{kSHOOTER_ZERO_1.yaw};
+    config.pitchOffset = units::degree_t{kSHOOTER_ZERO_1.pitch};
     config.yawSign = kRotationYawSign;
     config.pitchSign = kRotationPitchSign;
     config.requireIntersectionInFront = true;
     return config;
 }
-PixelToWorld pixelToWorld(makePTWConfig());
+CameraProjection projection(makeProjectionConfig());
 
 
 
@@ -391,216 +356,9 @@ static uint8_t updateFireControl(bool targetValid,
 
 bool ifInTol(float yaw_error, float pitch_error)
 {
-    return std::abs(yaw_error) <= kTolIndeg && std::abs(pitch_error) <= kTolIndeg;
+    return std::abs(yaw_error) <= kAIM_TOLERANCE && std::abs(pitch_error) <= kAIM_TOLERANCE;
 }
 
-// 圆环检测
-namespace
-{
-using namespace cv;
-
-// 按当前颜色生成二值图
-void buildColorMask(const Mat& hsv, Mat& mask)
-{
-    mask = Mat::zeros(hsv.size(), CV_8U);
-
-    if (kTargetColor == TargetColor::Red || kTargetColor == TargetColor::Any)
-    {
-        // 红的 H 跨 0 分两段
-        Mat red1, red2;
-        inRange(hsv, red_ranges_low[0], red_ranges_low[1], red1);
-        inRange(hsv, red_ranges_high[0], red_ranges_high[1], red2);
-        bitwise_or(red1, red2, mask);
-    }
-
-    if (kTargetColor == TargetColor::Blue || kTargetColor == TargetColor::Any)
-    {
-        Mat blue;
-        inRange(hsv, blue_low, blue_high, blue);
-        bitwise_or(mask, blue, mask);
-    }
-}
-
-// 屏幕上显示颜色模式用
-const char* targetColorName()
-{
-    switch (kTargetColor)
-    {
-        case TargetColor::Red:  return "red";
-        case TargetColor::Blue: return "blue";
-        case TargetColor::Any:
-        default:                return "any";
-    }
-}
-
-std::vector<Rect> detectColorRing(const Mat& frame, Mat& maskOut)
-{
-    std::vector<Rect> targetBoxs;
-
-    Mat hsv, mask0;
-    std::vector<std::vector<Point>> contours;
-    std::vector<Vec4i> hierarchy;
-
-    // BGR to HSV
-    cvtColor(frame, hsv, COLOR_BGR2HSV);
-
-    // 按当前颜色取二值图
-    buildColorMask(hsv, mask0);
-
-    // 闭开去噪
-    morphologyEx(mask0, mask0, MORPH_CLOSE, kernel);
-    morphologyEx(mask0, mask0, MORPH_OPEN, kernel);
-    maskOut = mask0;   // 这里不开窗口 二值图拿回主循环显示
-
-    // 两层轮廓
-    findContours(mask0.clone(), contours, hierarchy, RETR_CCOMP, CHAIN_APPROX_SIMPLE);
-
-    for (int cnt = 0; cnt < static_cast<int>(contours.size()); ++cnt)
-    {
-        // 太小的不要
-        if (contourArea(contours[cnt]) < 80)
-        {
-            continue;
-        }
-        // 只要最外层的
-        if (hierarchy[cnt][3] != -1)
-        {
-            continue;
-        }
-        // 没内孔的不是环
-        if (hierarchy[cnt][2] == -1)
-        {
-            continue;
-        }
-
-        // 取最大子轮廓当内孔
-        int next = hierarchy[cnt][2];
-        double inAera = 0;
-        int in_cnt = -1;
-        while (next != -1)
-        {
-            if (contourArea(contours[next]) < 80)
-            {
-                next = hierarchy[next][0];
-                continue;
-            }
-            if (contourArea(contours[next]) > inAera)
-            {
-                inAera = contourArea(contours[next]);
-                in_cnt = next;
-            }
-            next = hierarchy[next][0];
-        }
-        if (inAera < 80 || in_cnt < 0)
-        {
-            continue;
-        }
-
-        // 外圈圆度
-        double experi = arcLength(contours[cnt], true);
-        double exArea = contourArea(contours[cnt]);
-        if (experi <= 1e-6)
-        {
-            continue;
-        }
-        double circularity = 4.0 * CV_PI * exArea / (experi * experi);
-        if (circularity < 0.7 || circularity > 1.3)
-        {
-            continue;
-        }
-
-        // 内孔也卡一遍
-        double inPeri = arcLength(contours[in_cnt], true);
-        if (inPeri <= 1e-6)
-        {
-            continue;
-        }
-        double inCircularity = 4.0 * CV_PI * inAera / (inPeri * inPeri);
-        if (inCircularity < 0.7 || inCircularity > 1.3)
-        {
-            continue;
-        }
-
-        // 内外形状相似
-        if (matchShapes(contours[cnt], contours[in_cnt], CONTOURS_MATCH_I1, 0) > 0.3)
-        {
-            continue;
-        }
-
-        // 同心
-        Point2f oc, ic;
-        float orad = 0, irad = 0;
-        minEnclosingCircle(contours[cnt], oc, orad);
-        minEnclosingCircle(contours[in_cnt], ic, irad);
-        if (orad <= 1e-6)
-        {
-            continue;
-        }
-        double dx = oc.x - ic.x, dy = oc.y - ic.y;
-        double offset = std::sqrt(dx * dx + dy * dy) / orad;
-        if (offset > 0.4)
-        {
-            continue;
-        }
-
-        // 粗细
-        double rRatio = static_cast<double>(irad) / orad;
-        if (rRatio < 0.3 || rRatio > 0.9)
-        {
-            continue;
-        }
-
-        Rect Box = boundingRect(contours[cnt]);
-
-        // 长宽比
-        double rate = static_cast<double>(Box.width) / Box.height;
-        if (rate > 1.2 || rate < 0.8)
-        {
-            continue;
-        }
-
-        targetBoxs.push_back(Box);
-    }
-
-    return targetBoxs;
-}
-
-cv::Point2f getTargetCenter(const cv::Rect& box)
-{
-    return cv::Point2f(box.x + box.width * 0.5F, box.y + box.height * 0.5F);
-}
-
-// 多个环直接选最大的
-BladeTarget pickTarget(const std::vector<Rect>& boxes)
-{
-    BladeTarget best;
-    double bestArea = 0.0;
-    for (std::size_t i = 0; i < boxes.size(); ++i)
-    {
-        const Point2f c(boxes[i].x + boxes[i].width * 0.5F,
-                        boxes[i].y + boxes[i].height * 0.5F);
-        const double area = static_cast<double>(boxes[i].area());
-        if (best.valid == false || area > bestArea)
-        {
-            best.center = c;
-            best.box = boxes[i];
-            if (boxes[i].width > boxes[i].height)
-            {
-                best.radius = boxes[i].width * 0.5F;
-            }
-            else
-            {
-                best.radius = boxes[i].height * 0.5F;
-            }
-            best.score = area;
-            best.valid = true;
-            bestArea = area;
-        }
-    }
-    return best;
-}
-
-}
 /*---------算法函数编写区域结束----------*/
 
 
@@ -734,7 +492,7 @@ int main()
                 return frc::Translation3d{};
             }
 
-            const auto targetInWorld = pixelToWorld.projectPixelToWorld(
+            const auto targetInWorld = projection.pixelToWorld(
                 cv::Point2d{target.center.x, target.center.y},
                 GimbalAngles{
                     units::degree_t{feedback.pitch_angle},
@@ -752,7 +510,7 @@ int main()
         {
             estimator.calc(targetInBase, controllerNow);
             if (std::isfinite(estimator.getRes()) &&
-                estimator.getRes() > 0.2)
+                estimator.getRes() > kMAX_RES_TOLERANCE)
             {
                 estimator.reset();
                 modelLockDebouncer.reset(false);
@@ -762,7 +520,7 @@ int main()
             const bool modelFitReady =
                 estimator.hasEnoughSamples() &&
                 std::isfinite(estimator.getRes()) &&
-                estimator.getRes() < 0.0012;
+                estimator.getRes() < kMODEL_RES_TOLERANCE;
 
             if (!g_modelLocked &&
                 modelLockDebouncer.update(modelFitReady))
@@ -774,16 +532,16 @@ int main()
         }
         
         frc::Translation3d expTarget = model.getPhaseAtTime(0.35 , targetInBase ,true);
-        model.updateOmega(std::numbers::pi / 3);
+        // model.updateOmega(std::numbers::pi / 3);
         AxisData angles = getShootAngles(expTarget);
-        AxisData leadAngles = withLead(angles , -1 , -1);
+        AxisData AnglesWithLead = withLead(angles , 0 , 0);
 
 
         sendData.Gimbal_Ctrl = 1;
         const bool aimTargetValid =
             targetProjectionValid && (!useOmega || g_modelLocked);
         if (aimTargetValid &&
-            std::isfinite(leadAngles.yaw) && std::isfinite(leadAngles.pitch))
+            std::isfinite(AnglesWithLead.yaw) && std::isfinite(AnglesWithLead.pitch))
         {
             if (!g_commandInitialized)
             {
@@ -795,10 +553,10 @@ int main()
             const double maxCommandStep =
                 kCommandSlewRateDegPerSec * controlDt;
             g_commandYaw += clampValue(
-                leadAngles.yaw - g_commandYaw,
+                AnglesWithLead.yaw - g_commandYaw,
                 -maxCommandStep, maxCommandStep);
             g_commandPitch += clampValue(
-                leadAngles.pitch - g_commandPitch,
+                AnglesWithLead.pitch - g_commandPitch,
                 -maxCommandStep, maxCommandStep);
     
             sendData.yaw_angle = static_cast<float>(g_commandYaw);
@@ -808,7 +566,7 @@ int main()
         sendData.Push_flag = updateFireControl(
             aimTargetValid,
             feedbackValid,
-            leadAngles,
+            AnglesWithLead,
             feedback,
             frameReceivedAt);
 
@@ -830,8 +588,8 @@ int main()
             center.Y().value() + model.getRadius(),
             center.Z().value()};
 
-        const auto centerPixel = pixelToWorld.worldToPixel(center, anglesInUnits);
-        const auto edgePixel = pixelToWorld.worldToPixel(edge, anglesInUnits);
+        const auto centerPixel = projection.worldToPixel(center, anglesInUnits);
+        const auto edgePixel = projection.worldToPixel(edge, anglesInUnits);
 
         const int radiusPx = cvRound(cv::norm(*edgePixel - *centerPixel));
         cv::circle(image, *centerPixel, radiusPx, cv::Scalar(255, 255, 0), 2);
@@ -858,9 +616,9 @@ int main()
                             " tgtpitch=" + std::to_string(
                             static_cast<int>(angles.pitch)) +
                             " leadyaw=" + std::to_string(
-                            static_cast<int>(leadAngles.yaw)) +
+                            static_cast<int>(AnglesWithLead.yaw)) +
                             " leadpitch=" + std::to_string(
-                            static_cast<int>(leadAngles.pitch)) +
+                            static_cast<int>(AnglesWithLead.pitch)) +
                             " res=" + cv::format("%.4f", estimator.getRes()),
                         cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7,
                         cv::Scalar(0, 255, 255), 2);
@@ -869,7 +627,7 @@ int main()
 
             if (targetProjectionValid)
             {
-                const auto predictedPixel = pixelToWorld.worldToPixel(expTarget, anglesInUnits);
+                const auto predictedPixel = projection.worldToPixel(expTarget, anglesInUnits);
 
                 const cv::Point predictedPoint(cvRound(predictedPixel->x),
                                                    cvRound(predictedPixel->y));

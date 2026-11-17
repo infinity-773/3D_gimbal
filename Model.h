@@ -4,24 +4,13 @@
 #include <turret_kinematics/Pose3d.h>
 #include <turret_kinematics/Translation2d.h>
 #include <cmath>
-
-#define PI 3.14159265358979323846
-
-namespace frc {
-using Translation2d = turret_kinematics::Translation2d;
-using Translation3d = turret_kinematics::Translation3d;
-using Rotation2d = turret_kinematics::Rotation2d;
-using Rotation3d = turret_kinematics::Rotation3d;
-using Transform3d = turret_kinematics::Transform3d;
-}
-
-
+#include <Constants.h>
 
 
 class Model {
 public:
-    Model(double distance = 2.0, double radius = 0.270): 
-        center{distance, -0.1, 0.200}, r{radius}, omega{PI/3} {}
+    Model(frc::Translation3d center, double radius  , double omega ): 
+        center{center}, r{radius}, omega{omega} {}
 
     frc::Translation3d getPhaseAtTime(double dt , frc::Translation3d const& currTarget ,bool Anti){
         const double dy = currTarget.Y().value() - center.Y().value();
@@ -88,11 +77,6 @@ private:
     double r;
     double time = 0;
 
-    units::degree_t offset = 0.0_deg;
-
-
-    const frc::Translation3d camInBase{0.00934 , 0 , 0.1102};
-    const frc::Translation3d shooterInBase{0.05139 , 0 , 0.0622};
 };
 
 #endif // MODEL_H
