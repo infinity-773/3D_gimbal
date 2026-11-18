@@ -13,6 +13,10 @@ ctest --test-dir /tmp/energy-gimbal-build -R '^energy_gimbal$' --output-on-failu
 
 主程序入口为 `vision_gimbal.cpp`，保留原例程的相机和串口基础设施。默认相机 `/dev/video0`、串口 `/dev/ttyUSB_vision`；`F` 切换开火，`C` 切换颜色，`Q` 或 Esc 退出。开火默认关闭。反馈不新鲜、晚于帧到达时间或缺失时不生成有效观测；原发送线程仍会发送零增量、推杆保持、摩擦轮零速命令，需确认下位机对该命令的实际行为，并另设通信超时保护。
 
+## 调试面板
+
+`Camera` 显示图形标记，`Log` 单独显示字段，`Mask` 显示二值图。按 `D` 切换调试标记和二值图，按 `S` 保存当前画面和二值图。需要增加字段时，调用 `dashboard.setLogField("字段名", 值)`；同名字段会更新，新字段会自动加入 `Log` 窗口。OpenCV 默认字体适合英文和数字字段名。
+
 ## 数据流和标定
 
 1. 在 `vision_gimbal.cpp` 的全局算法参数区填写实测平面位置、圆心、半径、叶片切点直径、相机内参和畸变，以及零位下相机安装外参；示例数值未经标定。相机标定步骤见 `camera_calibration/README.md`。OpenCV 4.6 的矩阵构造器不是 constexpr，内参和畸变先以 constexpr 数组保存，再在启动时构造 OpenCV 类型。

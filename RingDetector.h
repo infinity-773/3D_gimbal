@@ -14,7 +14,7 @@ enum class TargetColor
 };
 
 // 识别到的目标
-struct BladeTarget
+struct TargetPx
 {
     cv::Point2f center;          // 框中心
     cv::Rect box;                 // 选中的框
@@ -32,9 +32,14 @@ namespace
 using namespace cv;
 
 // 按当前颜色生成二值图
-void buildColorMask(const Mat& hsv, Mat& mask)
+void buildColorMask(const Mat& hsv, Mat& mask ,bool isYellow)
 {
     mask = Mat::zeros(hsv.size(), CV_8U);
+    if (isYellow)
+    {
+        inRange(hsv, yellow_low, yellow_high, mask);
+        return;
+    }
 
     if (kTargetColor == TargetColor::Red || kTargetColor == TargetColor::Any)
     {
@@ -53,6 +58,7 @@ void buildColorMask(const Mat& hsv, Mat& mask)
     }
 }
 
+
 // 屏幕上显示颜色模式用
 const char* targetColorName()
 {
@@ -65,7 +71,7 @@ const char* targetColorName()
     }
 }
 
-std::vector<Rect> detectColorRing(const Mat& frame, Mat& maskOut)
+std::vector<Rect> detectColorRing(const Mat& frame, Mat& maskOut, bool isYellow)
 {
     std::vector<Rect> targetBoxs;
 
@@ -77,7 +83,7 @@ std::vector<Rect> detectColorRing(const Mat& frame, Mat& maskOut)
     cvtColor(frame, hsv, COLOR_BGR2HSV);
 
     // 按当前颜色取二值图
-    buildColorMask(hsv, mask0);
+    buildColorMask(hsv, mask0, isYellow);
 
     // 闭开去噪
     morphologyEx(mask0, mask0, MORPH_CLOSE, kernel);
@@ -202,34 +208,12 @@ cv::Point2f getTargetCenter(const cv::Rect& box)
     return cv::Point2f(box.x + box.width * 0.5F, box.y + box.height * 0.5F);
 }
 
-// 多个环直接选最大的
-BladeTarget pickTarget(const std::vector<Rect>& boxes)
-{
-    BladeTarget best;
-    double bestArea = 0.0;
-    for (std::size_t i = 0; i < boxes.size(); ++i)
-    {
-        const Point2f c(boxes[i].x + boxes[i].width * 0.5F,
-                        boxes[i].y + boxes[i].height * 0.5F);
-        const double area = static_cast<double>(boxes[i].area());
-        if (best.valid == false || area > bestArea)
-        {
-            best.center = c;
-            best.box = boxes[i];
-            if (boxes[i].width > boxes[i].height)
-            {
-                best.radius = boxes[i].width * 0.5F;
-            }
-            else
-            {
-                best.radius = boxes[i].height * 0.5F;
-            }
-            best.score = area;
-            best.valid = true;
-            bestArea = area;
-        }
-    }
-    return best;
+
+bool hasYellowRing(const cv::Mat& frame){
+
+    cv::Mat mask;
+    std::vector<cv::Rect> boxes = detectColorRing(frame, mask, true);
+    return !boxes.empty();
 }
 
 }

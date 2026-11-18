@@ -1,6 +1,5 @@
 #ifndef ESTIMATOR_H
 #define ESTIMATOR_H
-#include "Model.h"
 #include <opencv2/core.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
@@ -15,7 +14,7 @@
 #include <mutex>
 #include <thread>
 #include <atomic>
-#include <constants.h>
+#include <Constants.h>
 class CenterEstimator {
 public:
     CenterEstimator( frc ::Translation3d perior ,double r):
@@ -26,7 +25,7 @@ public:
     huber(kHUBER),
     radius(r) {};
 
-    void calc(frc::Translation3d targetInBase , double now){
+    void calcCenter(frc::Translation3d targetInBase , double now){
         const double targetX = targetInBase.X().value();
         const double targetY = targetInBase.Y().value();
         const double targetZ = targetInBase.Z().value();
@@ -39,7 +38,7 @@ public:
         //update targets
 
         if (targets
-            .size() >= 20) {
+            .size() >= kPOINTS_NUM) {
             targets
             .pop_front();
         }
@@ -154,7 +153,7 @@ public:
         return targets.size() >= 5;
     }
 
-    void reset()
+    void resetCenter()
     {
         targets.clear();
         expectedCenter = periorData;
@@ -171,6 +170,70 @@ private:
     double huber ;
     double radius ;
 
+};
+
+struct OmegaSample {
+    int time;
+    frc::Rotation2d rotation;
+};
+
+class OmegaEstimator {
+public:
+    OmegaEstimator();
+
+    void updateOmega(int now , frc::Translation3d const& target ,frc::Translation3d const& center3D){
+        frc::Rotation2d rotation = ToYZ(target , center3D).Angle().value();
+        if(samples.size() >= 10) {
+            samples.pop_front();
+        }
+        samples.push_back({now, rotation});
+
+        if(samples.size() <= sampleNum) { return; }
+
+        //时间归一化，将第一个样本的时间设为 0
+        for(auto& smp : samples) {
+            smp.time -= samples.front().time;
+        }
+        //最小二乘
+        double time_sum = 0.0 , rotation_sum = 0.0;
+        double time_sq_sum = 0.0, timeXrotation_sum = 0.0;
+        for(const auto& smp : samples) {
+            time_sum += smp.time;
+            rotation_sum += smp.rotation.Degrees().value();
+            time_sq_sum += smp.time * smp.time;
+            timeXrotation_sum += smp.time * smp.rotation.Degrees().value();
+        }
+        double denom = samples.size() * time_sq_sum - time_sum * time_sum;
+        if(denom == 0.0) { std::cerr << "Denominator is zero in OmegaEstimator::updateOmega" << std::endl; return; }
+        expectedOmega = (samples.size() * timeXrotation_sum - time_sum * rotation_sum) / denom;
+
+    };
+    double matchOmega(double Omega) {
+        double omega = 0.0;
+        double minDelta = std::numeric_limits<double>::infinity();
+        for (const auto& targetOmega : targetOmegas) {
+            double delta = std::abs(Omega - targetOmega);
+            if(delta < minDelta) {
+                minDelta = delta;
+                omega = targetOmega;
+            }
+        }
+        return omega;
+        
+    }
+
+
+
+    double getOmega() const {
+        return expectedOmega;
+    }
+
+private:
+    std::array<double,2> targetOmegas;
+    std::deque<OmegaSample> samples;
+    int lastUpdateTime;
+    double expectedOmega;
+    double sampleNum;
 };
 
 

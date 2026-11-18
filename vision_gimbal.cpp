@@ -21,12 +21,14 @@
 #include "Debouncer.h"
 #include "MathUtils.h"
 #include "CameraProjection.h"
-#include "Model.h"
+#include "DashBoard.h"
 #include "Estimator.h"
 #include <string>
 #include <vector>
-#include <constants.h>
 #include <RingDetector.h>
+#include "FireControl.h"
+#include "TargetMatcher.h"
+#include <AimSolver.h>
 /*---------添加区域结束----------*/
 
 
@@ -160,9 +162,6 @@ int cameraSharpness = 100;
 /*---------需要编写：自己的全局变量和算法参数----------*/
 // 在这里添加 HSV 阈值,计时起点等。
 
-// 控制台
-static bool kShowDebug = true;    // 调试窗口 按 d 关
-static bool kEnableFire = false;  // 开火总开关 调参时一定关着
 
 
 
@@ -177,27 +176,22 @@ static double kRotationPitchSign = 1.0;
 
 static double kAimTolPx = 20.0; // 只用于画图
 
-// 跨帧要记住的
-static int  g_shotsFired = 0;
-static bool g_pushRetracting = false;
-static std::chrono::steady_clock::time_point g_pushRetractStartedAt;
-static bool g_aimedStable = false;
-static bool g_fireArmed = true;
-static int  g_frameIndex = 0;
+
 static std::chrono::steady_clock::time_point g_lastControlAt;
 static bool g_modelLocked = false;
 static bool g_commandInitialized = false;
 static double g_commandYaw = 0.0;
 static double g_commandPitch = 0.0;
-
+static bool hasYellow = true;
 bool useOmega = true; // 是否使用模型预测
 
 
-//初始化
-Debouncer aimedDebouncer(kAIM_STABLE_FRAMES, DebounceEdge::Rising);
+
 Debouncer modelLockDebouncer(kMODEL_STABLE_FRAMES, DebounceEdge::Rising);
-static Model model = Model(kCENTER_IN_BASE , kTRAJECTORY_RADIUS , kOMEGA);
-static CenterEstimator estimator = CenterEstimator(kCENTER_IN_BASE, model.getRadius());
+static CenterEstimator estimator = CenterEstimator(kCENTER_IN_BASE, kTRAJECTORY_RADIUS);
+static frc::Translation3d center = kCENTER_IN_BASE;
+static double omega = std::numbers::pi / 3;
+static TargetMatcher targetMatcher;
 
 
 
@@ -304,60 +298,7 @@ void receiveLoop()
 /*---------需要编写：自己的算法函数（按需添加）----------*/
 // 在这里定义圆环识别、弹道解算等函数，再到主循环的动手区调用。
 
-static bool ifInTol(float yaw_error, float pitch_error);
 
-static uint8_t updateFireControl(bool targetValid,
-                                 bool feedbackValid,
-                                 const AxisData& desiredAngles,
-                                 const TRoMaC::GimbalFeedback& feedback,
-                                 std::chrono::steady_clock::time_point now)
-{
-    const bool validAimData = targetValid && feedbackValid &&
-        std::isfinite(desiredAngles.yaw) &&
-        std::isfinite(desiredAngles.pitch) &&
-        std::isfinite(feedback.yaw_angle) &&
-        std::isfinite(feedback.pitch_angle);
-
-    if (!validAimData)
-    {
-        g_aimedStable = false;
-        aimedDebouncer.reset(false);
-    }
-    else
-    {
-        const double yawError = desiredAngles.yaw - static_cast<double>(feedback.yaw_angle);
-        const double pitchError = desiredAngles.pitch - static_cast<double>(feedback.pitch_angle);
-        g_aimedStable = ifInTol(static_cast<float>(yawError), static_cast<float>(pitchError));
-        g_aimedStable = aimedDebouncer.update(g_aimedStable);
-    }
-
-    if (!g_aimedStable)
-    {
-        g_fireArmed = true;
-    }
-
-    if (kEnableFire && g_aimedStable && g_fireArmed && !g_pushRetracting)
-    {
-        g_fireArmed = false;
-        g_pushRetracting = true;
-        g_pushRetractStartedAt = now;
-        ++g_shotsFired;
-        std::cout << "[FIRE] 第 " << g_shotsFired << " 发\n";
-    }
-
-    if (g_pushRetracting &&
-        now - g_pushRetractStartedAt >= std::chrono::milliseconds(kPushRetractMs))
-    {
-        g_pushRetracting = false;
-    }
-
-    return g_pushRetracting ? 0 : 1;
-}
-
-bool ifInTol(float yaw_error, float pitch_error)
-{
-    return std::abs(yaw_error) <= kAIM_TOLERANCE && std::abs(pitch_error) <= kAIM_TOLERANCE;
-}
 
 /*---------算法函数编写区域结束----------*/
 
@@ -410,7 +351,6 @@ int main()
         useSerial = false;
     }
 
-    cv::namedWindow("Camera", cv::WINDOW_NORMAL);
     cv::Mat image;
     int exitCode = 0;
     std::thread sender;
@@ -422,6 +362,7 @@ int main()
     }
 
     const auto controllerStart = std::chrono::steady_clock::now();
+    DashBoard dashboard;
     g_lastControlAt = controllerStart;
     while (running.load())
     {
@@ -473,8 +414,58 @@ int main()
 
         // 找环
         cv::Mat mask;
-        std::vector<cv::Rect> rings = detectColorRing(image, mask);
-        BladeTarget target = pickTarget(rings);
+        std::vector<cv::Rect> rings = detectColorRing(image, mask,false);
+        //取目标点
+        std::vector<TargetPx> targetsPx =
+            [&]() {
+                if (rings.empty()) {
+                    return std::vector<TargetPx>{};
+                }
+                std::vector<TargetPx> pts;
+                for (const auto& box : rings) {
+                    TargetPx t;
+                    t.center = getTargetCenter(box);
+                    t.radius = (box.width + box.height) / 4.0F;
+                    t.box = box;
+                    t.valid = true;
+                    pts.push_back(t);
+                }
+                return pts;
+            }();
+
+        bool targetProjectionValid = false;
+        std::vector<frc::Translation3d> targetsInBase= 
+            [&]() {
+                if (targetsPx.empty()) {
+                    return std::vector<frc::Translation3d>{};
+                }
+                std::vector<frc::Translation3d> pts;
+                for (const auto& p : targetsPx) {
+                    const auto targetInWorld = projection.pixelToWorld(
+                        cv::Point2d{p.center.x, p.center.y},
+                        GimbalAngles{
+                            units::degree_t{feedback.pitch_angle},
+                            units::degree_t{feedback.yaw_angle}});
+                    if (targetInWorld) {
+                        pts.push_back(*targetInWorld);
+                    }
+                }
+                targetProjectionValid = !pts.empty();
+                return pts;
+            }();
+
+        static bool previousHasYellow = false;
+        hasYellow = hasYellowRing(image);
+        const bool yellowAppeared = hasYellow && !previousHasYellow;
+        previousHasYellow = hasYellow;
+        if (yellowAppeared)
+        {
+            g_modelLocked = false;
+            estimator.resetCenter();
+            modelLockDebouncer.reset(false);
+            targetMatcher.reset();
+            std::cout << "检测到黄色目标，模型解锁并清空拟合历史。\n";
+        }
 
         const int controllerNow = static_cast<int>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -484,35 +475,15 @@ int main()
             0.001, 0.1);
         g_lastControlAt = frameReceivedAt;
 
-        bool targetProjectionValid = false;
+        
 
-        frc::Translation3d targetInBase = [&]() {
-            if (!target.valid || !feedbackValid)
-            {
-                return frc::Translation3d{};
-            }
-
-            const auto targetInWorld = projection.pixelToWorld(
-                cv::Point2d{target.center.x, target.center.y},
-                GimbalAngles{
-                    units::degree_t{feedback.pitch_angle},
-                    units::degree_t{feedback.yaw_angle}});
-            if (!targetInWorld)
-            {
-                return frc::Translation3d{};
-            }
-
-            targetProjectionValid = true;
-            return *targetInWorld;
-        }();
-
-        if (targetProjectionValid)
+        if (targetProjectionValid && !hasYellow)
         {
-            estimator.calc(targetInBase, controllerNow);
+            estimator.calcCenter(targetsInBase[0], controllerNow);
             if (std::isfinite(estimator.getRes()) &&
                 estimator.getRes() > kMAX_RES_TOLERANCE)
             {
-                estimator.reset();
+                estimator.resetCenter();
                 modelLockDebouncer.reset(false);
                 std::cout << "拟合残差过大，已清空历史样本。\n";
             }
@@ -525,21 +496,29 @@ int main()
             if (!g_modelLocked &&
                 modelLockDebouncer.update(modelFitReady))
             {
-                model.updateCenter(estimator.getExpCenter());
+                center = estimator.getExpCenter();
+                targetMatcher.initialize(center, targetsInBase[0], controllerNow);
                 g_modelLocked = true;
                 std::cout << "模型已锁定，停止更新。\n";
             }
         }
         
-        frc::Translation3d expTarget = model.getPhaseAtTime(0.35 , targetInBase ,true);
-        // model.updateOmega(std::numbers::pi / 3);
+        std::optional<frc::Translation3d> currentTarget;
+        if (g_modelLocked && targetProjectionValid && !hasYellow)
+        {
+            currentTarget = targetMatcher.select(targetsInBase, controllerNow, omega);
+        }
+
+        frc::Translation3d expTarget = currentTarget
+            ? AimSolver::getPhaseAtTime(0.35, *currentTarget, center, omega, true)
+            : center;
         AxisData angles = getShootAngles(expTarget);
-        AxisData AnglesWithLead = withLead(angles , 0 , 0);
+        AxisData AnglesWithLead = withLead(angles, 0, 0);
 
 
         sendData.Gimbal_Ctrl = 1;
-        const bool aimTargetValid =
-            targetProjectionValid && (!useOmega || g_modelLocked);
+        const bool aimTargetValid = currentTarget.has_value() &&
+            (!useOmega || g_modelLocked);
         if (aimTargetValid &&
             std::isfinite(AnglesWithLead.yaw) && std::isfinite(AnglesWithLead.pitch))
         {
@@ -563,235 +542,49 @@ int main()
             sendData.pitch_angle = static_cast<float>(g_commandPitch);
         }
 
+        const int shotsBeforeFire = g_shotsFired;
         sendData.Push_flag = updateFireControl(
             aimTargetValid,
             feedbackValid,
             AnglesWithLead,
             feedback,
             frameReceivedAt);
-
-        // 画图
-        const auto center = model.getExpCenter();
-        const GimbalAngles anglesInUnits{
-            units::degree_t{feedback.pitch_angle},
-                units::degree_t{feedback.yaw_angle}};
-        cv::putText(image,
-                    cv::format("center=(%.3f, %.3f, %.3f) m",
-                               center.X().value(), center.Y().value(), center.Z().value()),
-                    cv::Point(10, 150), cv::FONT_HERSHEY_SIMPLEX, 0.6,
-                    cv::Scalar(255, 255, 0), 2);
-        cv::circle(image, cv::Point(static_cast<int>(kAimU), static_cast<int>(kAimV)),
-                   6, cv::Scalar(0, 255, 0), 2);
-
-        const frc::Translation3d edge{
-            center.X().value(),
-            center.Y().value() + model.getRadius(),
-            center.Z().value()};
-
-        const auto centerPixel = projection.worldToPixel(center, anglesInUnits);
-        const auto edgePixel = projection.worldToPixel(edge, anglesInUnits);
-
-        const int radiusPx = cvRound(cv::norm(*edgePixel - *centerPixel));
-        cv::circle(image, *centerPixel, radiusPx, cv::Scalar(255, 255, 0), 2);
-        if (target.valid)
+        if (g_shotsFired > shotsBeforeFire)
         {
-            const cv::Point targetcenter(static_cast<int>(target.center.x),
-                                   static_cast<int>(target.center.y));
-            cv::Scalar color;
-            if (g_aimedStable == true)
-            {
-                color = cv::Scalar(0, 255, 0);
-            }
-            else
-            {
-                color = cv::Scalar(0, 0, 255);
-            }
-            cv::circle(image, targetcenter, static_cast<int>(target.radius), color, 2);
-            cv::line(image, targetcenter,
-                     cv::Point(static_cast<int>(kAimU), static_cast<int>(kAimV)),
-                     cv::Scalar(0, 255, 255), 1);
-            cv::putText(image,
-                        "tgtyaw=" + std::to_string(
-                            static_cast<int>(angles.yaw)) +
-                            " tgtpitch=" + std::to_string(
-                            static_cast<int>(angles.pitch)) +
-                            " leadyaw=" + std::to_string(
-                            static_cast<int>(AnglesWithLead.yaw)) +
-                            " leadpitch=" + std::to_string(
-                            static_cast<int>(AnglesWithLead.pitch)) +
-                            " res=" + cv::format("%.4f", estimator.getRes()),
-                        cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7,
-                        cv::Scalar(0, 255, 255), 2);
-
-        //轨迹圆 && 目标点
-
-            if (targetProjectionValid)
-            {
-                const auto predictedPixel = projection.worldToPixel(expTarget, anglesInUnits);
-
-                const cv::Point predictedPoint(cvRound(predictedPixel->x),
-                                                   cvRound(predictedPixel->y));
-                cv::drawMarker(image, predictedPoint, cv::Scalar(255, 0, 255),
-                                   cv::MARKER_CROSS, 20, 2);
-                cv::putText(image, "PRED", predictedPoint + cv::Point(14, -12),
-                                cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(255, 0, 255), 1);
-                
-            }
-            
-        }
-        else
-        {
-            cv::putText(image, "NO TARGET", cv::Point(10, 30),
-                        cv::FONT_HERSHEY_SIMPLEX, 0.9, cv::Scalar(0, 0, 255), 2);
-        }
-        std::string fireText;
-        cv::Scalar fireColor;
-        if (kEnableFire == true)
-        {
-            fireText = " FIRE ON";
-            fireColor = cv::Scalar(0, 0, 255);
-        }
-        else
-        {
-            fireText = " FIRE OFF";
-            fireColor = cv::Scalar(0, 255, 0);
-        }
-        cv::putText(image, "shots=" + std::to_string(g_shotsFired) + fireText,
-                    cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.7, fireColor, 2);
-        const std::string feedbackText = feedbackReceived
-            ? cv::format("feedback yaw=%.2f pitch=%.2f%s",
-                         static_cast<double>(feedback.yaw_angle),
-                         static_cast<double>(feedback.pitch_angle),
-                         feedbackValid ? "" : " (stale)")
-            : "feedback not received";
-        cv::putText(image, feedbackText, cv::Point(10, 120),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.65,
-                    feedbackValid ? cv::Scalar(255, 255, 255)
-                                  : (feedbackReceived ? cv::Scalar(0, 165, 255)
-                                                      : cv::Scalar(0, 0, 255)), 2);
-        const std::string frictionSpeedText =
-            "friction cmd L=" + std::to_string(sendData.left_speed) +
-            " R=" + std::to_string(sendData.right_speed) + " | feedback ";
-        const std::string frictionFeedbackText = feedbackReceived
-            ? "L=" + std::to_string(feedback.left_speed) +
-                  " R=" + std::to_string(feedback.right_speed) +
-                  (feedbackValid ? "" : " (stale)")
-            : "not received";
-        cv::putText(image, frictionSpeedText + frictionFeedbackText,
-                    cv::Point(10, 180), cv::FONT_HERSHEY_SIMPLEX, 0.55,
-                    feedbackValid ? cv::Scalar(255, 255, 255)
-                                  : (feedbackReceived ? cv::Scalar(0, 165, 255)
-                                                      : cv::Scalar(0, 0, 255)), 2);
-        //cv::putText(image, std::string("state=") + superStructure.getstateName(),
-        //            cv::Point(10, 150), cv::FONT_HERSHEY_SIMPLEX, 0.65,
-        //            cv::Scalar(255, 255, 255), 2);
-        cv::putText(image, std::string("color: ") + targetColorName(),
-                    cv::Point(10, 90), cv::FONT_HERSHEY_SIMPLEX, 0.55,
-                    cv::Scalar(255, 255, 0), 1);
-
-        if (kShowDebug == true)
-        {
-            // 瞄准点和接受圈
-            const cv::Point aimPoint(static_cast<int>(kAimU), static_cast<int>(kAimV));
-            cv::drawMarker(image, aimPoint, cv::Scalar(0, 255, 0), cv::MARKER_CROSS, 20, 1);
-            cv::circle(image, aimPoint, static_cast<int>(kAimTolPx),
-                       cv::Scalar(0, 255, 0), 1);
-            cv::putText(image, "AIM", aimPoint + cv::Point(14, -12),
-                        cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(0, 255, 0), 1);
-
-            // 图例
-            const int lx = image.cols - 216;
-            const int ly = image.rows - 96;
-            cv::rectangle(image, cv::Rect(lx - 10, ly - 10, 216, 96),
-                          cv::Scalar(0, 0, 0), cv::FILLED);
-            cv::circle(image, cv::Point(lx + 4, ly + 6), 4, cv::Scalar(0, 255, 0), -1);
-            cv::putText(image, "AIM   impact point",
-                        cv::Point(lx + 16, ly + 11), cv::FONT_HERSHEY_SIMPLEX, 0.42,
-                        cv::Scalar(0, 255, 0), 1);
-            cv::circle(image, cv::Point(lx + 4, ly + 30), 4, cv::Scalar(0, 0, 255), -1);
-            cv::putText(image, "TGT   detected ring",
-                        cv::Point(lx + 16, ly + 35), cv::FONT_HERSHEY_SIMPLEX, 0.42,
-                        cv::Scalar(0, 0, 255), 1);
-            cv::putText(image, "yellow line = error",
-                        cv::Point(lx + 4, ly + 60), cv::FONT_HERSHEY_SIMPLEX, 0.38,
-                        cv::Scalar(200, 200, 200), 1);
-
-            // 帧率 框数
-            static std::chrono::steady_clock::time_point prevFrameAt = frameReceivedAt;
-            const double frameDt =
-                std::chrono::duration<double>(frameReceivedAt - prevFrameAt).count();
-            prevFrameAt = frameReceivedAt;
-            static double fps = 0.0;
-            if (frameDt > 1e-6)
-            {
-                if (fps <= 0.0)
-                {
-                    fps = 1.0 / frameDt;
-                }
-                else
-                {
-                    fps = 0.9 * fps + 0.1 / frameDt;
-                }
-            }
-            cv::putText(image,
-                        "fps=" + std::to_string(static_cast<int>(fps + 0.5)) +
-                            "  rings=" + std::to_string(static_cast<int>(rings.size())),
-                        cv::Point(10, image.rows - 14), cv::FONT_HERSHEY_SIMPLEX, 0.5,
-                        cv::Scalar(255, 255, 255), 1);
-
-            cv::imshow("Mask", mask);
+            targetMatcher.markFired();
         }
 
-        cv::imshow("Camera", image);
-        int key = cv::waitKey(1); // 也负责刷新窗口，不能删掉。
-        if (key == 'q' || key == 'Q' || key == 27)
-        {
+
+        //**************************************画图和字段log******************************************** */
+        const DashboardFrame dashboardFrame{
+            .target = targetsPx,
+            .aimPoint = {kAimU, kAimV},
+            .aimTolerance = kAimTolPx,
+            .aimedStable = g_aimedStable,
+            .targetProjectionValid = targetProjectionValid,
+            .feedbackReceived = feedbackReceived,
+            .feedbackValid = feedbackValid,
+            .fireEnabled = kEnableFire,
+            .modelLocked = g_modelLocked,
+            .shotsFired = g_shotsFired,
+            .ringCount = rings.size(),
+            .angles = angles,
+            .leadAngles = AnglesWithLead,
+            .residual = estimator.getRes(),
+            .center = center,
+            .radius = kTRAJECTORY_RADIUS,
+            .predictedTarget = expTarget,
+            .gimbalAngles = {units::degree_t{feedback.pitch_angle}, units::degree_t{feedback.yaw_angle}},
+            .feedback = feedback,
+            .command = sendData,
+            .targetColor = kTargetColor,
+            .receivedAt = frameReceivedAt};
+        dashboard.updateLog(dashboardFrame);
+        dashboard.draw(image, dashboardFrame, projection);
+        dashboard.show(image, mask);
+        if (!dashboard.processKeys(image, mask, kEnableFire, kTargetColor))
             break;
-        }
-        if (key == 's' || key == 'S')       // 按 s 存图
-        {
-            const std::string index = std::to_string(g_frameIndex);
-            cv::imwrite("cap_" + index + ".png", image);
-            cv::imwrite("cap_" + index + "_mask.png", mask);
-            std::cout << "已保存 cap_" << index << ".png\n";
-            ++g_frameIndex;
-        }
-        if (key == 'd' || key == 'D')       // 按 d 开关二值图窗口
-        {
-            kShowDebug = !kShowDebug;
-            if (kShowDebug == false)
-            {
-                cv::destroyWindow("Mask");
-            }
-        }
-        if (key == 'f' || key == 'F')       // 按 f 开关开火
-        {
-            kEnableFire = !kEnableFire;
-            if (kEnableFire == true)
-            {
-                std::cout << "开火开关: ON" << '\n';
-            }
-            else
-            {
-                std::cout << "开火开关: OFF" << '\n';
-            }
-        }
-        if (key == 'c' || key == 'C')       // 按 c 循环切 红 蓝 任意
-        {
-            if (kTargetColor == TargetColor::Red)
-            {
-                kTargetColor = TargetColor::Blue;
-            }
-            else if (kTargetColor == TargetColor::Blue)
-            {
-                kTargetColor = TargetColor::Any;
-            }
-            else
-            {
-                kTargetColor = TargetColor::Red;
-            }
-            std::cout << "目标颜色: " << targetColorName() << '\n';
-        }
+            
         /*---------图像识别和控制编写区域结束----------*/
 
         /*---------禁止修改：发布发送数据、退出清理----------*/
