@@ -39,7 +39,6 @@ int main()
     DashboardFrame frame{};
     frame.aimPoint = {80, 60};
     frame.aimTolerance = 10;
-    frame.target.valid = true;
     TargetPx target;
     target.valid = true;
     target.center = {50, 50};
@@ -54,6 +53,57 @@ int main()
     if (cv::norm(image, cv::NORM_L1) == 0)
     {
         std::cerr << "Dashboard did not draw the target\n";
+        return 1;
+    }
+
+    TargetMatcher matcher;
+    const frc::Translation3d center{2.0, 0.0, 0.0};
+    const frc::Translation3d firstTarget{2.0, -0.4, 0.0};
+    if (!matcher.markers(0.4).empty())
+    {
+        std::cerr << "Uninitialized matcher produced markers\n";
+        return 1;
+    }
+    matcher.initialize(center, firstTarget, 0);
+    auto markers = matcher.markers(0.4);
+    if (markers.size() != 5 || markers[0].active ||
+        (markers[0].position - firstTarget).Norm().value() > 1e-6)
+    {
+        std::cerr << "Initialized target markers are incorrect\n";
+        return 1;
+    }
+    if (!matcher.select({firstTarget}, 0, 0.0))
+    {
+        std::cerr << "Could not select first target\n";
+        return 1;
+    }
+    matcher.markFired();
+    markers = matcher.markers(0.4);
+    if (!markers[0].active || markers[1].active)
+    {
+        std::cerr << "Target marker states are incorrect\n";
+        return 1;
+    }
+
+    CameraProjectionConfig config;
+    config.fx = config.fy = 100.0;
+    config.cx = 80.0;
+    config.cy = 60.0;
+    CameraProjection projection{config};
+    frame.target.clear();
+    frame.targetMarkers = markers;
+    frame.center = center;
+    frame.radius = 0.4;
+    frame.aimPoint = {0, 0};
+    image = cv::Mat::zeros(120, 160, CV_8UC3);
+    dashboard.draw(image, frame, projection);
+    const auto hit = projection.worldToPixel(markers[0].position, frame.gimbalAngles);
+    const auto open = projection.worldToPixel(markers[1].position, frame.gimbalAngles);
+    if (!hit || !open ||
+        image.at<cv::Vec3b>(cvRound(hit->y), cvRound(hit->x)) != cv::Vec3b(0, 0, 255) ||
+        image.at<cv::Vec3b>(cvRound(open->y), cvRound(open->x)) != cv::Vec3b(255, 0, 0))
+    {
+        std::cerr << "Target marker colors are incorrect\n";
         return 1;
     }
     return 0;

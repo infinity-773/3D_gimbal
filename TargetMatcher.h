@@ -9,6 +9,12 @@
 #include <optional>
 #include <vector>
 
+struct TargetMarker
+{
+    frc::Translation3d position;
+    bool active = false;
+};
+
 class TargetMatcher
 {
 public:
@@ -24,8 +30,10 @@ public:
         const auto rotation = ToYZ(firstPosition, center_).Angle();
         if (!rotation)
         {
+            initialized_ = false;
             return;
         }
+        initialized_ = true;
         for (std::size_t i = 0; i < targets_.size(); ++i)
         {
             targets_[i].rotation = frc::Rotation2d{
@@ -85,6 +93,30 @@ public:
         }
     }
 
+    std::vector<TargetMarker> markers(double radius) const
+    {
+        std::vector<TargetMarker> result;
+        if (!initialized_)
+        {
+            return result;
+        }
+
+        result.reserve(targets_.size());
+        for (const auto& target : targets_)
+        {
+            const frc::Translation2d offset{
+                units::meter_t{radius * target.rotation.Cos()},
+                units::meter_t{radius * target.rotation.Sin()}};
+            result.push_back({ToXYZ(offset, center_), target.active});
+        }
+        return result;
+    }
+
+    bool initialized() const
+    {
+        return initialized_;
+    }
+
 private:
     struct Target
     {
@@ -140,6 +172,7 @@ private:
     frc::Translation3d center_;
     int lastUpdateAt_ = 0;
     std::optional<std::size_t> currentIndex_;
+    bool initialized_ = false;
 };
 
 #endif // TARGET_MATCHER_H

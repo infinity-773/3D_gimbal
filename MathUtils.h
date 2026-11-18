@@ -1,7 +1,11 @@
 #ifndef MATH_UTILS_H_
 #define MATH_UTILS_H_
 
+#include <turret_kinematics/Pose2d.h>
 #include <turret_kinematics/Rotation2d.h>
+#include <turret_kinematics/Rotation3d.h>
+#include <turret_kinematics/Transform2d.h>
+#include <turret_kinematics/Transform3d.h>
 #include <turret_kinematics/Translation2d.h>
 #include <turret_kinematics/Translation3d.h>
 

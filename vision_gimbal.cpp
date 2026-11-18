@@ -504,7 +504,7 @@ int main()
         }
         
         std::optional<frc::Translation3d> currentTarget;
-        if (g_modelLocked && targetProjectionValid && !hasYellow)
+        if (g_modelLocked && !hasYellow)
         {
             currentTarget = targetMatcher.select(targetsInBase, controllerNow, omega);
         }
@@ -512,6 +512,7 @@ int main()
         frc::Translation3d expTarget = currentTarget
             ? AimSolver::getPhaseAtTime(0.35, *currentTarget, center, omega, true)
             : center;
+  
         AxisData angles = getShootAngles(expTarget);
         AxisData AnglesWithLead = withLead(angles, 0, 0);
 
@@ -558,6 +559,8 @@ int main()
         //**************************************画图和字段log******************************************** */
         const DashboardFrame dashboardFrame{
             .target = targetsPx,
+            .targetMarkers = g_modelLocked ? targetMatcher.markers(kTRAJECTORY_RADIUS)
+                                           : std::vector<TargetMarker>{},
             .aimPoint = {kAimU, kAimV},
             .aimTolerance = kAimTolPx,
             .aimedStable = g_aimedStable,

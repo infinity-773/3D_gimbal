@@ -5,6 +5,7 @@
 #include "MathUtils.h"
 #include "RingDetector.h"
 #include "Serial.h"
+#include "TargetMatcher.h"
 
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -21,6 +22,7 @@
 struct DashboardFrame
 {
 	std::vector<TargetPx> target;
+	std::vector<TargetMarker> targetMarkers;
 	cv::Point2d aimPoint;
 	double aimTolerance;
 	bool aimedStable;
@@ -168,6 +170,22 @@ public:
 			drawAim(image, aim, frame.aimTolerance);
 			drawLegend(image);
 		}
+		if (frame.feedbackValid)
+		{
+			for (const TargetMarker& marker : frame.targetMarkers)
+			{
+				const auto pixel = projection.worldToPixel(marker.position, frame.gimbalAngles);
+				if (!pixel)
+					continue;
+				const cv::Point point(cvRound(pixel->x), cvRound(pixel->y));
+				const cv::Scalar color = marker.active
+					? cv::Scalar(0, 0, 255)
+					: cv::Scalar(255, 0, 0);
+				cv::drawMarker(image, point, color, cv::MARKER_CROSS, 24, 2);
+				cv::putText(image, marker.active ? "HIT" : "OPEN", point + cv::Point(12, -10),
+					cv::FONT_HERSHEY_SIMPLEX, 0.38, color, 1);
+			}
+		}
 	}
 
 	void show(const cv::Mat& image, const cv::Mat& mask) const
@@ -247,6 +265,14 @@ private:
 					cv::FONT_HERSHEY_SIMPLEX, 0.42, cv::Scalar(0, 0, 255), 1);
 		cv::putText(image, "yellow line = error", cv::Point(x + 4, y + 60),
 					cv::FONT_HERSHEY_SIMPLEX, 0.38, cv::Scalar(200, 200, 200), 1);
+		cv::drawMarker(image, cv::Point(x + 4, y + 82), cv::Scalar(255, 0, 0),
+			cv::MARKER_CROSS, 10, 2);
+		cv::putText(image, "OPEN     ", cv::Point(x + 16, y + 87),
+			cv::FONT_HERSHEY_SIMPLEX, 0.38, cv::Scalar(255, 0, 0), 1);
+		cv::drawMarker(image, cv::Point(x + 82, y + 82), cv::Scalar(0, 0, 255),
+			cv::MARKER_CROSS, 10, 2);
+		cv::putText(image, "HIT", cv::Point(x + 94, y + 87),
+			cv::FONT_HERSHEY_SIMPLEX, 0.38, cv::Scalar(0, 0, 255), 1);
 	}
 
 	void saveImages(const cv::Mat& image, const cv::Mat& mask)
