@@ -45,7 +45,7 @@ public:
         targets
         .push_back(targetInBase);
         
-        if (targets.size() < 5)
+        if (targets.size() < 10)
         {
             res = std::numeric_limits<double>::infinity();
             return;
@@ -77,9 +77,9 @@ public:
                 //该点权重开根号
                 const double residualMagnitude = std::abs(residual);
                 const double sw = std::sqrt(
-                    residualMagnitude >= huber
+                    residualMagnitude <= huber
                         ? 1.0
-                        : huber / std::max(residualMagnitude, 1e-12));
+                        : huber / std::max(residualMagnitude, 1e-15));
 
                 //填入矩阵
                 residuals.at<double>(p,0) = residual * sw;
@@ -125,7 +125,7 @@ public:
             };
             //Δ小于阈值，结束本周期迭代
             
-            if(std::hypot(boundedDeltaY, boundedDeltaZ) < 1e-8) break;
+            if(std::hypot(boundedDeltaY, boundedDeltaZ) < 1e-12) break;
         }
 
         double squaredResidualSum = 0.0;
@@ -150,7 +150,7 @@ public:
     }
 
     bool hasEnoughSamples() const {
-        return targets.size() >= 5;
+        return targets.size() >= 10;
     }
 
     void resetCenter()
@@ -172,68 +172,149 @@ private:
 
 };
 
-struct OmegaSample {
-    int time;
-    frc::Rotation2d rotation;
+struct OmegaSample
+{
+    double timeSec;
+    double phaseRad;
 };
 
-class OmegaEstimator {
+class OmegaEstimator
+{
 public:
-    OmegaEstimator();
-
-    void updateOmega(int now , frc::Translation3d const& target ,frc::Translation3d const& center3D){
-        frc::Rotation2d rotation = ToYZ(target , center3D).Angle().value();
-        if(samples.size() >= 10) {
-            samples.pop_front();
+    bool updateOmega(int now, const frc::Translation3d& target,
+                     const frc::Translation3d& center3D)
+    {
+        const auto angle = ToYZ(target, center3D).Angle();
+        if (!angle)
+        {
+            reset();
+            return false;
         }
-        samples.push_back({now, rotation});
 
-        if(samples.size() <= sampleNum) { return; }
+        const double timeSec = static_cast<double>(now) * 0.001;
+        const double wrappedPhase = angle->Radians().value();
+        if (samples_.empty())
+        {
+            samples_.push_back({timeSec, wrappedPhase});
+            lastWrappedPhase_ = wrappedPhase;
+            ready_ = false;
+            return false;
+        }
 
-        //时间归一化，将第一个样本的时间设为 0
-        for(auto& smp : samples) {
-            smp.time -= samples.front().time;
+        constexpr double slotAngle = 2.0 * std::numbers::pi / 5.0;
+        double delta = std::remainder(
+            wrappedPhase - lastWrappedPhase_, slotAngle);
+        const double unwrappedPhase = samples_.back().phaseRad + delta;
+        lastWrappedPhase_ = wrappedPhase;
+        samples_.push_back({timeSec, unwrappedPhase});
+        if (samples_.size() > 20)
+        {
+            samples_.pop_front();
         }
-        //最小二乘
-        double time_sum = 0.0 , rotation_sum = 0.0;
-        double time_sq_sum = 0.0, timeXrotation_sum = 0.0;
-        for(const auto& smp : samples) {
-            time_sum += smp.time;
-            rotation_sum += smp.rotation.Degrees().value();
-            time_sq_sum += smp.time * smp.time;
-            timeXrotation_sum += smp.time * smp.rotation.Degrees().value();
+        if (samples_.size() < 8 ||
+            samples_.back().timeSec - samples_.front().timeSec < 0.1)
+        {
+            ready_ = false;
+            return false;
         }
-        double denom = samples.size() * time_sq_sum - time_sum * time_sum;
-        if(denom == 0.0) { std::cerr << "Denominator is zero in OmegaEstimator::updateOmega" << std::endl; return; }
-        expectedOmega = (samples.size() * timeXrotation_sum - time_sum * rotation_sum) / denom;
 
-    };
-    double matchOmega(double Omega) {
-        double omega = 0.0;
-        double minDelta = std::numeric_limits<double>::infinity();
-        for (const auto& targetOmega : targetOmegas) {
-            double delta = std::abs(Omega - targetOmega);
-            if(delta < minDelta) {
-                minDelta = delta;
-                omega = targetOmega;
-            }
+        const double count = static_cast<double>(samples_.size());
+        double meanTime = 0.0;
+        double meanPhase = 0.0;
+        for (const auto& sample : samples_)
+        {
+            meanTime += sample.timeSec / count;
+            meanPhase += sample.phaseRad / count;
         }
-        return omega;
-        
+        double timeVariance = 0.0;
+        double covariance = 0.0;
+        for (const auto& sample : samples_)
+        {
+            const double dt = sample.timeSec - meanTime;
+            timeVariance += dt * dt;
+            covariance += dt * (sample.phaseRad - meanPhase);
+        }
+        if (timeVariance <= 1e-12)
+        {
+            ready_ = false;
+            return false;
+        }
+
+        const double fittedOmega = covariance / timeVariance;
+        if (!std::isfinite(fittedOmega) || std::abs(fittedOmega) < 1e-6)
+        {
+            ready_ = false;
+            return false;
+        }
+        measuredOmega_ = std::abs(fittedOmega);
+        matchedOmega_ = matchOmega(measuredOmega_);
+        ready_ = true;
+        return true;
     }
 
+    void reset()
+    {
+        samples_.clear();
+        lastWrappedPhase_ = 0.0;
+        measuredOmega_ = 0.0;
+        pendingOmega_ = matchedOmega_;
+        pendingFrames_ = 0;
+        ready_ = false;
+    }
 
+    double getOmega() const
+    {
+        return matchedOmega_;
+    }
 
-    double getOmega() const {
-        return expectedOmega;
+    double getMeasuredOmega() const
+    {
+        return measuredOmega_;
+    }
+
+    bool ready() const
+    {
+        return ready_;
     }
 
 private:
-    std::array<double,2> targetOmegas;
-    std::deque<OmegaSample> samples;
-    int lastUpdateTime;
-    double expectedOmega;
-    double sampleNum;
+    double matchOmega(double measuredOmega)
+    {
+        const double candidate = *std::min_element(
+            kTARGET_OMEGAS.begin(), kTARGET_OMEGAS.end(),
+            [measuredOmega](double lhs, double rhs) {
+                return std::abs(lhs - measuredOmega) <
+                       std::abs(rhs - measuredOmega);
+            });
+        constexpr double kSwitchMargin = 0.20;
+        constexpr int kSwitchStableFrames = 5;
+        const double improvement =
+            std::abs(matchedOmega_ - measuredOmega) -
+            std::abs(candidate - measuredOmega);
+        if (candidate == matchedOmega_ || improvement < kSwitchMargin)
+        {
+            pendingOmega_ = matchedOmega_;
+            pendingFrames_ = 0;
+            return matchedOmega_;
+        }
+
+        if (std::abs(candidate - pendingOmega_) < 1e-9)
+            ++pendingFrames_;
+        else
+        {
+            pendingOmega_ = candidate;
+            pendingFrames_ = 1;
+        }
+        return pendingFrames_ >= kSwitchStableFrames ? candidate : matchedOmega_;
+    }
+
+    std::deque<OmegaSample> samples_;
+    double lastWrappedPhase_ = 0.0;
+    double measuredOmega_ = 0.0;
+    double matchedOmega_ = kTARGET_OMEGAS[1];
+    double pendingOmega_ = kTARGET_OMEGAS[1];
+    int pendingFrames_ = 0;
+    bool ready_ = false;
 };
 
 

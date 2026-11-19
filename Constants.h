@@ -20,13 +20,16 @@ using Transform3d = turret_kinematics::Transform3d;
 
 //*************************************场地常量**********************************/
 //坐标 frc为右手系 x前，y左，z上   
-static const frc::Translation3d kCAM_IN_BASE{0.00934 , 0 , 0.1102};
-static const frc::Translation3d kSHOOTER_IN_BASE{0.05139 , 0 , 0.0622};
-static constexpr frc::Translation3d kCAM_IN_SHOOTER = kCAM_IN_BASE - kSHOOTER_IN_BASE;  //使用自定义 “-” 操作符
-static const frc::Translation3d kCENTER_IN_BASE{2.0 , 0.0 , 0.135};
+static const frc::Translation3d kPITCH_AXIS_IN_BASE{0.0, 0.0, 0.0};
+static const frc::Translation3d kYAW_AXIS_IN_BASE{0.010, 0.0, 0.0};
+// Camera position relative to the yaw-axis origin.
+static const frc::Translation3d kCAM_IN_YAW{0.00934 , 0 , 0.1102};
+static const frc::Translation3d kSHOOTER_IN_BASE{0 , 0 , 0.0622};
+static constexpr frc::Translation3d kCAM_IN_SHOOTER = kCAM_IN_YAW - kSHOOTER_IN_BASE;  //使用自定义 “-” 操作符
+static const frc::Translation3d kCENTER_IN_BASE{2.0 , -0.03 , 0.160};
 //轨迹半径
 static const double kTRAJECTORY_RADIUS = 0.215;
-static const double kOMEGA = std::numbers::pi / 3;
+static const double kSTATIC_OMEGA = std::numbers::pi / 3;
 
 //********************************炮台零点偏移 ；feedBack + offset = trueDegs************************************/
 //yaw左正 pitch下正
@@ -38,11 +41,11 @@ static const AxisData kSHOOTER_ZERO_5 = AxisData {.yaw=0.0 , .pitch=0.0};
 
 //***************************************HSV****************************************** */
 // 蓝色
-static const cv::Scalar blue_low  = cv::Scalar(100, 180, 200);   
-static const cv::Scalar blue_high = cv::Scalar(120, 255, 255);
+static const cv::Scalar blue_low  = cv::Scalar(90, 90, 90);   
+static const cv::Scalar blue_high = cv::Scalar(130, 255, 255);
 // 红色 H 跨两头 分两段
-static const cv::Scalar red_ranges_low[2]  = {cv::Scalar(0, 110, 137),   cv::Scalar(11, 255, 255)};  
-static const cv::Scalar red_ranges_high[2] = {cv::Scalar(168, 110, 137), cv::Scalar(179, 255, 255)};
+static const cv::Scalar red_ranges_low[2]  = {cv::Scalar(0, 90, 110),   cv::Scalar(11, 255, 255)};  
+static const cv::Scalar red_ranges_high[2] = {cv::Scalar(168, 90, 110), cv::Scalar(179, 255, 255)};
 //黄色 
 static const cv::Scalar yellow_low  = cv::Scalar(20, 150, 150);   
 static const cv::Scalar yellow_high = cv::Scalar(50, 255, 255);
@@ -65,8 +68,13 @@ static const int kMODEL_STABLE_FRAMES = 55;
 static const double kHUBER = 0.08;
 static const double kLAMBDA = 0.4;
 static const double kMAX_RES_TOLERANCE = 0.2;
-static const double kMODEL_RES_TOLERANCE = 0.0012;
+static const double kMODEL_RES_TOLERANCE = 0.0020;
 //目标匹配
-static const units::degree_t kTARGET_MATCH_TOLERANCE = units::degree_t{10.0}; // 目标匹配容差
+static const units::degree_t kTARGET_MATCH_TOLERANCE = units::degree_t{15.0}; // 目标匹配容差
+static const int kTARGET_HIT_CONFIRM_MS = 300; // 发射后延迟确认当前目标已命中
+static constexpr std::array<double, 3> kTARGET_OMEGAS{
+    std::numbers::pi / 3.0,
+    std::numbers::pi / 2.0,
+    2.0 * std::numbers::pi / 3.0}; // 三档目标角速度，单位 rad/s，仅用于提前量
 
 #endif

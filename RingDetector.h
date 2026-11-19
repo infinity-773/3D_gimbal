@@ -96,7 +96,7 @@ std::vector<Rect> detectColorRing(const Mat& frame, Mat& maskOut, bool isYellow)
     for (int cnt = 0; cnt < static_cast<int>(contours.size()); ++cnt)
     {
         // 太小的不要
-        if (contourArea(contours[cnt]) < 80)
+        if (contourArea(contours[cnt]) < 50)
         {
             continue;
         }
@@ -117,7 +117,7 @@ std::vector<Rect> detectColorRing(const Mat& frame, Mat& maskOut, bool isYellow)
         int in_cnt = -1;
         while (next != -1)
         {
-            if (contourArea(contours[next]) < 80)
+            if (contourArea(contours[next]) < 50)
             {
                 next = hierarchy[next][0];
                 continue;
@@ -129,7 +129,7 @@ std::vector<Rect> detectColorRing(const Mat& frame, Mat& maskOut, bool isYellow)
             }
             next = hierarchy[next][0];
         }
-        if (inAera < 80 || in_cnt < 0)
+        if (inAera < 50 || in_cnt < 0)
         {
             continue;
         }
@@ -137,7 +137,7 @@ std::vector<Rect> detectColorRing(const Mat& frame, Mat& maskOut, bool isYellow)
         // 外圈圆度
         double experi = arcLength(contours[cnt], true);
         double exArea = contourArea(contours[cnt]);
-        if (experi <= 1e-6)
+        if (experi <= 1e-9)
         {
             continue;
         }
@@ -149,7 +149,7 @@ std::vector<Rect> detectColorRing(const Mat& frame, Mat& maskOut, bool isYellow)
 
         // 内孔也卡一遍
         double inPeri = arcLength(contours[in_cnt], true);
-        if (inPeri <= 1e-6)
+        if (inPeri <= 1e-9)
         {
             continue;
         }
@@ -160,7 +160,7 @@ std::vector<Rect> detectColorRing(const Mat& frame, Mat& maskOut, bool isYellow)
         }
 
         // 内外形状相似
-        if (matchShapes(contours[cnt], contours[in_cnt], CONTOURS_MATCH_I1, 0) > 0.3)
+        if (matchShapes(contours[cnt], contours[in_cnt], CONTOURS_MATCH_I1, 0) > 0.4)
         {
             continue;
         }
@@ -183,7 +183,7 @@ std::vector<Rect> detectColorRing(const Mat& frame, Mat& maskOut, bool isYellow)
 
         // 粗细
         double rRatio = static_cast<double>(irad) / orad;
-        if (rRatio < 0.3 || rRatio > 0.9)
+        if (rRatio < 0.1 || rRatio > 0.9)
         {
             continue;
         }
@@ -192,7 +192,7 @@ std::vector<Rect> detectColorRing(const Mat& frame, Mat& maskOut, bool isYellow)
 
         // 长宽比
         double rate = static_cast<double>(Box.width) / Box.height;
-        if (rate > 1.2 || rate < 0.8)
+        if (rate > 1.3 || rate < 0.7)
         {
             continue;
         }

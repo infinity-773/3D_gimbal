@@ -26,6 +26,7 @@ CameraProjectionConfig::CameraProjectionConfig()
           turret_kinematics::Translation3d{0.0, 0.0, 0.0},
           turret_kinematics::Rotation3d::FromDegrees(-90.0, 0.0, -90.0)},
       gimbalOriginInWorld{0.0, 0.0, 0.0},
+      yawOriginInPitchFrame{0.0, 0.0, 0.0},
       targetPlaneNormalWorld{1.0, 0.0, 0.0},
       targetPlanePointWorld{2.0, 0.0, 0.0},
       yawOffset{0.0},
@@ -74,11 +75,15 @@ std::optional<turret_kinematics::Translation3d> CameraProjection::pixelToWorld(
     const double pitchRadians =
         config_.pitchSign * (gimbalAngles.pitch.value() + config_.pitchOffset.value()) * kPi / 180.0;
 
-    const turret_kinematics::Pose3d gimbalPoseInWorld{
+    const turret_kinematics::Pose3d pitchPoseInWorld{
         config_.gimbalOriginInWorld,
-        turret_kinematics::Rotation3d{0.0, pitchRadians, yawRadians}};
+        turret_kinematics::Rotation3d{0.0, pitchRadians, 0.0}};
+    const turret_kinematics::Pose3d yawPoseInWorld = pitchPoseInWorld.TransformBy(
+        turret_kinematics::Transform3d{
+            config_.yawOriginInPitchFrame,
+            turret_kinematics::Rotation3d{0.0, 0.0, yawRadians}});
     const turret_kinematics::Pose3d cameraPoseInWorld =
-        gimbalPoseInWorld.TransformBy(config_.gimbalToCamera);
+        yawPoseInWorld.TransformBy(config_.gimbalToCamera);
 
     const cv::Matx33d cameraMatrix{
         config_.fx, 0.0, config_.cx,
@@ -142,10 +147,13 @@ std::optional<cv::Point2d> CameraProjection::worldToPixel(
     const double pitch = config.pitchSign *
         (angles.pitch.value() + config.pitchOffset.value()) * CV_PI / 180.0;
 
-    const turret_kinematics::Pose3d gimbalPose{
+    const turret_kinematics::Pose3d pitchPose{
         config.gimbalOriginInWorld,
-        turret_kinematics::Rotation3d{0.0, pitch, yaw}};
-    const auto cameraPose = gimbalPose.TransformBy(config.gimbalToCamera);
+        turret_kinematics::Rotation3d{0.0, pitch, 0.0}};
+    const auto yawPose = pitchPose.TransformBy(turret_kinematics::Transform3d{
+        config.yawOriginInPitchFrame,
+        turret_kinematics::Rotation3d{0.0, 0.0, yaw}});
+    const auto cameraPose = yawPose.TransformBy(config.gimbalToCamera);
 
     const auto cameraPoint = (point - cameraPose.Translation())
         .RotateBy(-cameraPose.Rotation());

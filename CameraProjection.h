@@ -19,8 +19,12 @@ struct CameraProjectionConfig
     // Transform from the gimbal frame to the camera frame.
     turret_kinematics::Transform3d gimbalToCamera;
 
-    // Gimbal rotation center expressed in the world frame.
+    // Pitch-axis origin expressed in the world frame.
     turret_kinematics::Translation3d gimbalOriginInWorld;
+
+    // Yaw-axis origin expressed in the pitch frame. Pitch rotation therefore
+    // moves the yaw axis in world coordinates, while yaw rotates the camera.
+    turret_kinematics::Translation3d yawOriginInPitchFrame;
 
     // Target plane in world coordinates: normal dot (X - point) = 0.
     std::array<double, 3> targetPlaneNormalWorld;

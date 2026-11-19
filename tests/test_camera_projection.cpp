@@ -15,10 +15,13 @@ int main()
     config.cy = 360.0;
 
     const GimbalAngles angles{units::degree_t{8.0}, units::degree_t{-12.0}};
-    const turret_kinematics::Pose3d gimbalPose{
+    const turret_kinematics::Pose3d pitchPose{
         config.gimbalOriginInWorld,
-        turret_kinematics::Rotation3d{0.0, 8.0 * CV_PI / 180.0, -12.0 * CV_PI / 180.0}};
-    const auto cameraPose = gimbalPose.TransformBy(config.gimbalToCamera);
+        turret_kinematics::Rotation3d{0.0, 8.0 * CV_PI / 180.0, 0.0}};
+    const auto yawPose = pitchPose.TransformBy(turret_kinematics::Transform3d{
+        config.yawOriginInPitchFrame,
+        turret_kinematics::Rotation3d{0.0, 0.0, -12.0 * CV_PI / 180.0}});
+    const auto cameraPose = yawPose.TransformBy(config.gimbalToCamera);
     const turret_kinematics::Translation3d pointInCamera{0.55, -0.4, 2.0};
     const auto expected = cameraPose.Translation() + pointInCamera.RotateBy(cameraPose.Rotation());
     config.targetPlanePointWorld = expected;

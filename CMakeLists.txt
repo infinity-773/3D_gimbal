@@ -32,7 +32,7 @@ if(BUILD_TESTING)
     target_link_libraries(test_camera_projection PRIVATE ${OpenCV_LIBS} turret_kinematics)
     add_test(NAME camera_projection COMMAND test_camera_projection)
 
-    add_executable(test_dashboard tests/test_dashboard.cpp CameraProjection.cpp)
+    add_executable(test_dashboard tests/test_dashboard.cpp CameraProjection.cpp Debouncer.cpp)
     target_include_directories(test_dashboard PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/Serial ${OpenCV_INCLUDE_DIRS})
     target_link_libraries(test_dashboard PRIVATE ${OpenCV_LIBS} turret_kinematics)

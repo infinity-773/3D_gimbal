@@ -99,22 +99,22 @@ int cameraAutoExposure = 1;
 // 单位：100 us，即 19 = 1.9 ms，166 = 16.6 ms。
 // 实际时间范围：0.1～1000 ms。
 // 作用：增大通常更亮，但运动拖影更明显，过长还可能降低实际帧率。
-int cameraExposure = 9;
+int cameraExposure = 8;
 
 // 亮度
 // 范围：-64～64，步长 1，默认 0。
 // 作用：调整画面整体明暗。
-int cameraBrightness = 9;
+int cameraBrightness = 10;
 
 // 对比度
 // 范围：0～100，步长 1，默认 35。
 // 作用：调整明暗区域的差别。
-int cameraContrast = 50;
+int cameraContrast = 55;
 
 // 伽马
 // 范围：100～500，步长 1，默认 300。
 // 作用：调整中间亮度层次。
-int cameraGamma = 266;
+int cameraGamma = 300;
 
 // 逆光补偿
 // 范围：0～2，步长 1，默认 0。
@@ -178,20 +178,22 @@ static double kAimTolPx = 20.0; // 只用于画图
 
 
 static std::chrono::steady_clock::time_point g_lastControlAt;
-static bool g_modelLocked = false;
+static bool g_modelAccepted = false;
 static bool g_commandInitialized = false;
 static double g_commandYaw = 0.0;
 static double g_commandPitch = 0.0;
 static bool hasYellow = true;
 bool useOmega = true; // 是否使用模型预测
+bool recordHitTargets = true; // 是否记录已击打目标；关闭后所有目标始终视为未激活
 
 
 
 Debouncer modelLockDebouncer(kMODEL_STABLE_FRAMES, DebounceEdge::Rising);
 static CenterEstimator estimator = CenterEstimator(kCENTER_IN_BASE, kTRAJECTORY_RADIUS);
 static frc::Translation3d center = kCENTER_IN_BASE;
-static double omega = std::numbers::pi / 3;
+static double omega = kTARGET_OMEGAS[1];
 static TargetMatcher targetMatcher;
+static OmegaEstimator omegaEstimator;
 
 
 
@@ -204,20 +206,20 @@ static CameraProjectionConfig makeProjectionConfig()
     config.cy = kAimV;
     config.distortion = kCamDistD;
 
-    // Gimbal (forward, left, up) -> camera optical (right, down, forward).
+    // Pitch is the outer joint: pitch rotation moves the yaw-axis origin.
+    // Camera coordinates below are measured from the yaw axis.
+    config.gimbalOriginInWorld = kPITCH_AXIS_IN_BASE;
+    config.yawOriginInPitchFrame = kYAW_AXIS_IN_BASE - kPITCH_AXIS_IN_BASE;
     config.gimbalToCamera = turret_kinematics::Transform3d{
-        kCAM_IN_BASE,
+        kCAM_IN_YAW,
         turret_kinematics::Rotation3d::FromDegrees(-90.0, 0.0, -90.0)};
-
-    // World origin is defined at the gimbal rotation center.
-    config.gimbalOriginInWorld = {0.0, 0.0, 0.0};
 
     // Placeholder target plane 2 m forward; replace with the measured plane.
     config.targetPlaneNormalWorld = {1.0, 0.0, 0.0};
     config.targetPlanePointWorld = {2.0, 0.0, 0.0};
 
-    config.yawOffset = units::degree_t{kSHOOTER_ZERO_1.yaw};
-    config.pitchOffset = units::degree_t{kSHOOTER_ZERO_1.pitch};
+    config.yawOffset = units::degree_t{kSHOOTER_ZERO_3.yaw};
+    config.pitchOffset = units::degree_t{kSHOOTER_ZERO_3.pitch};
     config.yawSign = kRotationYawSign;
     config.pitchSign = kRotationPitchSign;
     config.requireIntersectionInFront = true;
@@ -405,8 +407,8 @@ int main()
         sendData.pitch_angle = feedback.pitch_angle;
         sendData.yaw_angle = feedback.yaw_angle;
         // 当前固定协议：左右摩擦轮目标速度、蜂鸣器和推杆标志。
-        sendData.left_speed = 600;
-        sendData.right_speed = 600;
+        sendData.left_speed = 480;
+        sendData.right_speed = 480;
         sendData.buzzer = 0;
         sendData.Push_flag = 1;
 
@@ -460,10 +462,12 @@ int main()
         previousHasYellow = hasYellow;
         if (yellowAppeared)
         {
-            g_modelLocked = false;
+            g_modelAccepted = false;
             estimator.resetCenter();
             modelLockDebouncer.reset(false);
             targetMatcher.reset();
+            omegaEstimator.reset();
+            omega = kTARGET_OMEGAS[1];
             std::cout << "检测到黄色目标，模型解锁并清空拟合历史。\n";
         }
 
@@ -493,35 +497,64 @@ int main()
                 std::isfinite(estimator.getRes()) &&
                 estimator.getRes() < kMODEL_RES_TOLERANCE;
 
-            if (!g_modelLocked &&
+            if (!g_modelAccepted &&
                 modelLockDebouncer.update(modelFitReady))
             {
                 center = estimator.getExpCenter();
                 targetMatcher.initialize(center, targetsInBase[0], controllerNow);
-                g_modelLocked = true;
-                std::cout << "模型已锁定，停止更新。\n";
+                omegaEstimator.reset();
+                omega = kTARGET_OMEGAS[1];
+                g_modelAccepted = true;
+                std::cout << "模型首次接受，后续持续使用拟合圆心。\n";
+            }
+            else if (g_modelAccepted)
+            {
+                center = estimator.getExpCenter();
+                targetMatcher.updateCenter(center);
             }
         }
         
+        targetMatcher.setRecordHitTargets(recordHitTargets);
         std::optional<frc::Translation3d> currentTarget;
-        if (g_modelLocked && !hasYellow)
+        if (g_modelAccepted && !hasYellow)
         {
             currentTarget = targetMatcher.select(targetsInBase, controllerNow, omega);
         }
+        if (g_modelAccepted && currentTarget &&
+            omegaEstimator.updateOmega(controllerNow, *currentTarget, center))
+        {
+            omega = omegaEstimator.getOmega();
+        }
 
-        frc::Translation3d expTarget = currentTarget
-            ? AimSolver::getPhaseAtTime(0.35, *currentTarget, center, omega, true)
-            : center;
+        frc::Translation3d expTarget = center;
+        if (currentTarget)
+        {
+            if (useOmega)
+            {
+                const auto correctedTarget = AimSolver::buildPointByR(
+                    *currentTarget, center, kTRAJECTORY_RADIUS);
+                expTarget = AimSolver::getPhaseAtTime(
+                    0.4, correctedTarget, center, omega, true);
+            }
+            else
+            {
+                expTarget = *currentTarget;
+            }
+        }
   
         AxisData angles = getShootAngles(expTarget);
-        AxisData AnglesWithLead = withLead(angles, 0, 0);
+        AxisData AnglesWithLead = withLead(angles, -2.5, -3.7);
+
+
 
 
         sendData.Gimbal_Ctrl = 1;
-        const bool aimTargetValid = currentTarget.has_value() &&
-            (!useOmega || g_modelLocked);
-        if (aimTargetValid &&
-            std::isfinite(AnglesWithLead.yaw) && std::isfinite(AnglesWithLead.pitch))
+        const bool aimTargetValid = currentTarget.has_value() && g_modelAccepted &&
+            std::isfinite(AnglesWithLead.yaw) && std::isfinite(AnglesWithLead.pitch);
+        const double desiredYaw = aimTargetValid ? AnglesWithLead.yaw : 0.0;
+        const double desiredPitch = aimTargetValid ? AnglesWithLead.pitch : 0.0;
+
+        if (feedbackValid)
         {
             if (!g_commandInitialized)
             {
@@ -530,15 +563,12 @@ int main()
                 g_commandInitialized = true;
             }
 
-            const double maxCommandStep =
-                kCommandSlewRateDegPerSec * controlDt;
+            const double maxCommandStep = kCommandSlewRateDegPerSec * controlDt;
             g_commandYaw += clampValue(
-                AnglesWithLead.yaw - g_commandYaw,
-                -maxCommandStep, maxCommandStep);
+                desiredYaw - g_commandYaw, -maxCommandStep, maxCommandStep);
             g_commandPitch += clampValue(
-                AnglesWithLead.pitch - g_commandPitch,
-                -maxCommandStep, maxCommandStep);
-    
+                desiredPitch - g_commandPitch, -maxCommandStep, maxCommandStep);
+
             sendData.yaw_angle = static_cast<float>(g_commandYaw);
             sendData.pitch_angle = static_cast<float>(g_commandPitch);
         }
@@ -552,14 +582,14 @@ int main()
             frameReceivedAt);
         if (g_shotsFired > shotsBeforeFire)
         {
-            targetMatcher.markFired();
+            targetMatcher.markFiredAt(controllerNow);
         }
 
 
         //**************************************画图和字段log******************************************** */
         const DashboardFrame dashboardFrame{
             .target = targetsPx,
-            .targetMarkers = g_modelLocked ? targetMatcher.markers(kTRAJECTORY_RADIUS)
+            .targetMarkers = g_modelAccepted ? targetMatcher.markers(kTRAJECTORY_RADIUS)
                                            : std::vector<TargetMarker>{},
             .aimPoint = {kAimU, kAimV},
             .aimTolerance = kAimTolPx,
@@ -568,14 +598,20 @@ int main()
             .feedbackReceived = feedbackReceived,
             .feedbackValid = feedbackValid,
             .fireEnabled = kEnableFire,
-            .modelLocked = g_modelLocked,
+            .modelAccepted = g_modelAccepted,
             .shotsFired = g_shotsFired,
             .ringCount = rings.size(),
             .angles = angles,
             .leadAngles = AnglesWithLead,
             .residual = estimator.getRes(),
             .center = center,
+            .fittedCenter = std::isfinite(estimator.getRes())
+                ? std::optional<frc::Translation3d>{estimator.getExpCenter()}
+                : std::nullopt,
             .radius = kTRAJECTORY_RADIUS,
+            .measuredOmega = omegaEstimator.getMeasuredOmega(),
+            .matchedOmega = omega,
+            .omegaReady = omegaEstimator.ready(),
             .predictedTarget = expTarget,
             .gimbalAngles = {units::degree_t{feedback.pitch_angle}, units::degree_t{feedback.yaw_angle}},
             .feedback = feedback,

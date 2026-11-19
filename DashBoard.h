@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <chrono>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -30,14 +31,18 @@ struct DashboardFrame
 	bool feedbackReceived;
 	bool feedbackValid;
 	bool fireEnabled;
-	bool modelLocked;
+	bool modelAccepted;
 	int shotsFired;
 	std::size_t ringCount;
 	AxisData angles;
 	AxisData leadAngles;
 	double residual;
 	frc::Translation3d center;
+	std::optional<frc::Translation3d> fittedCenter;
 	double radius;
+	double measuredOmega;
+	double matchedOmega;
+	bool omegaReady;
 	frc::Translation3d predictedTarget;
 	GimbalAngles gimbalAngles;
 	TRoMaC::GimbalFeedback feedback;
@@ -106,7 +111,11 @@ public:
 		setLogField("residual", frame.residual);
 		setLogField("center (m)", cv::format("%.3f, %.3f, %.3f", frame.center.X().value(),
 											frame.center.Y().value(), frame.center.Z().value()));
-		setLogField("model locked", frame.modelLocked ? "yes" : "no");
+		setLogField("model accepted", frame.modelAccepted ? "yes" : "no");
+		setLogField("omega measured", frame.omegaReady
+			? cv::format("%.3f rad/s", frame.measuredOmega)
+			: "fitting");
+		setLogField("omega matched", cv::format("%.3f rad/s", frame.matchedOmega));
 		setLogField("shots", frame.shotsFired);
 		setLogField("fire", frame.fireEnabled ? "ON" : "OFF");
 		setLogField("color", colorName(frame.targetColor));
@@ -129,16 +138,14 @@ public:
 	{
 		const cv::Point aim(cvRound(frame.aimPoint.x), cvRound(frame.aimPoint.y));
 		cv::circle(image, aim, 6, cv::Scalar(0, 255, 0), 2);
-		const frc::Translation3d edge{frame.center.X().value(),
-									 frame.center.Y().value() + frame.radius,
-									 frame.center.Z().value()};
 		if (frame.feedbackValid)
 		{
-			const auto center = projection.worldToPixel(frame.center, frame.gimbalAngles);
-			const auto edgePixel = projection.worldToPixel(edge, frame.gimbalAngles);
-			if (center && edgePixel)
-				cv::circle(image, *center, cvRound(cv::norm(*edgePixel - *center)),
-						   cv::Scalar(255, 255, 0), 2);
+			if (frame.fittedCenter)
+				drawTrajectory(image, *frame.fittedCenter, frame.radius, frame.gimbalAngles,
+							   projection, cv::Scalar(255, 255, 255));
+			if (frame.modelAccepted)
+				drawTrajectory(image, frame.center, frame.radius, frame.gimbalAngles,
+							   projection, cv::Scalar(0, 255, 0));
 		}
 		const bool hasTarget = std::any_of(frame.target.begin(), frame.target.end(),
 			[](const TargetPx& item) { return item.valid; });
@@ -231,6 +238,19 @@ public:
 	}
 
 private:
+	static void drawTrajectory(cv::Mat& image, const frc::Translation3d& center,
+							   double radius, const GimbalAngles& angles,
+							   const CameraProjection& projection, const cv::Scalar& color)
+	{
+		const frc::Translation3d edge{center.X().value(), center.Y().value() + radius,
+									 center.Z().value()};
+		const auto centerPixel = projection.worldToPixel(center, angles);
+		const auto edgePixel = projection.worldToPixel(edge, angles);
+		if (centerPixel && edgePixel)
+			cv::circle(image, *centerPixel, cvRound(cv::norm(*edgePixel - *centerPixel)),
+					   color, 2);
+	}
+
 	static const char* colorName(TargetColor color)
 	{
 		switch (color)

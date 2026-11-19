@@ -1,4 +1,5 @@
 #include "DashBoard.h"
+#include "Estimator.h"
 
 #include <iostream>
 
@@ -64,6 +65,23 @@ int main()
         std::cerr << "Uninitialized matcher produced markers\n";
         return 1;
     }
+    OmegaEstimator omegaEstimator;
+    for (int i = 0; i < 12; ++i)
+    {
+        const double phase = kTARGET_OMEGAS[1] * i * 0.02;
+        const frc::Translation3d sample = ToXYZ(
+            {units::meter_t{0.4 * std::cos(phase)},
+             units::meter_t{0.4 * std::sin(phase)}}, center);
+        omegaEstimator.updateOmega(i * 20, sample, center);
+    }
+    if (!omegaEstimator.ready() ||
+        std::abs(omegaEstimator.getMeasuredOmega() - kTARGET_OMEGAS[1]) > 1e-6 ||
+        std::abs(omegaEstimator.getOmega() - kTARGET_OMEGAS[1]) > 1e-6)
+    {
+        std::cerr << "Omega estimation or speed matching failed\n";
+        return 1;
+    }
+
     matcher.initialize(center, firstTarget, 0);
     auto markers = matcher.markers(0.4);
     if (markers.size() != 5 || markers[0].active ||
@@ -72,12 +90,42 @@ int main()
         std::cerr << "Initialized target markers are incorrect\n";
         return 1;
     }
+    const frc::Translation3d updatedCenter{2.0, 0.01, 0.02};
+    matcher.updateCenter(updatedCenter);
+    const auto updatedMarkers = matcher.markers(0.4);
+    if (std::abs(updatedMarkers[0].position.X().value() - updatedCenter.X().value()) > 1e-9 ||
+        (updatedMarkers[0].position - updatedCenter).Norm().value() < 0.39)
+    {
+        std::cerr << "Matcher did not apply the updated center\n";
+        return 1;
+    }
+    matcher.updateCenter(center);
     if (!matcher.select({firstTarget}, 0, 0.0))
     {
         std::cerr << "Could not select first target\n";
         return 1;
     }
-    matcher.markFired();
+    matcher.setRecordHitTargets(false);
+    matcher.select({firstTarget}, 0, 0.0);
+    matcher.markFiredAt(0);
+    if (!matcher.select({firstTarget}, 1, 0.0))
+    {
+        std::cerr << "Disabled hit recording did not keep target inactive\n";
+        return 1;
+    }
+    matcher.setRecordHitTargets(true);
+    matcher.markFiredAt(1);
+    if (!matcher.select({firstTarget}, kTARGET_HIT_CONFIRM_MS - 1, 0.0))
+    {
+        std::cerr << "Target was marked active before the shot delay\n";
+        return 1;
+    }
+    matcher.select({}, kTARGET_HIT_CONFIRM_MS + 1, 0.0);
+    if (matcher.select({firstTarget}, kTARGET_HIT_CONFIRM_MS + 2, 0.0))
+    {
+        std::cerr << "Matcher selected a target after the shot delay\n";
+        return 1;
+    }
     markers = matcher.markers(0.4);
     if (!markers[0].active || markers[1].active)
     {
@@ -104,6 +152,66 @@ int main()
         image.at<cv::Vec3b>(cvRound(open->y), cvRound(open->x)) != cv::Vec3b(255, 0, 0))
     {
         std::cerr << "Target marker colors are incorrect\n";
+        return 1;
+    }
+
+    frame.targetMarkers.clear();
+    frame.center = center;
+    frame.fittedCenter = frc::Translation3d{2.0, -0.5, 0.2};
+    frame.radius = 0.2;
+    frame.modelAccepted = true;
+    const auto circlePoint = [&](const frc::Translation3d& circleCenter) {
+        const auto projectedCenter = projection.worldToPixel(circleCenter, frame.gimbalAngles);
+        const auto projectedEdge = projection.worldToPixel(
+            {circleCenter.X().value(), circleCenter.Y().value() + frame.radius,
+             circleCenter.Z().value()}, frame.gimbalAngles);
+        if (!projectedCenter || !projectedEdge)
+            return cv::Point{-1, -1};
+        return cv::Point{cvRound(projectedCenter->x) -
+                             cvRound(cv::norm(*projectedEdge - *projectedCenter)),
+                         cvRound(projectedCenter->y)};
+    };
+    const cv::Point acceptedPoint = circlePoint(frame.center);
+    const cv::Point fittedPoint = circlePoint(*frame.fittedCenter);
+    if (acceptedPoint.x < 0 || fittedPoint.x < 0)
+    {
+        std::cerr << "Could not project trajectory test points\n";
+        return 1;
+    }
+    image = cv::Mat::zeros(120, 160, CV_8UC3);
+    dashboard.draw(image, frame, projection);
+    if (image.at<cv::Vec3b>(acceptedPoint) != cv::Vec3b(0, 255, 0) ||
+        image.at<cv::Vec3b>(fittedPoint) != cv::Vec3b(255, 255, 255))
+    {
+        std::cerr << "Accepted and fitted trajectory colors are incorrect\n";
+        return 1;
+    }
+    frame.modelAccepted = false;
+    image = cv::Mat::zeros(120, 160, CV_8UC3);
+    dashboard.draw(image, frame, projection);
+    if (image.at<cv::Vec3b>(acceptedPoint) != cv::Vec3b(0, 0, 0) ||
+        image.at<cv::Vec3b>(fittedPoint) != cv::Vec3b(255, 255, 255))
+    {
+        std::cerr << "Unlocked dashboard did not show only the fitted trajectory\n";
+        return 1;
+    }
+    frame.fittedCenter.reset();
+    image = cv::Mat::zeros(120, 160, CV_8UC3);
+    dashboard.draw(image, frame, projection);
+    if (image.at<cv::Vec3b>(fittedPoint) != cv::Vec3b(0, 0, 0))
+    {
+        std::cerr << "Dashboard drew a trajectory before a fit was available\n";
+        return 1;
+    }
+    frame.fittedCenter = frc::Translation3d{2.0, -0.5, 0.2};
+    frame.modelAccepted = true;
+    frame.feedbackValid = false;
+    image = cv::Mat::zeros(120, 160, CV_8UC3);
+    dashboard.draw(image, frame, projection);
+    if (image.at<cv::Vec3b>(acceptedPoint) != cv::Vec3b(0, 0, 0) ||
+        image.at<cv::Vec3b>(fittedPoint) != cv::Vec3b(0, 0, 0))
+    {
+        std::cerr << "Dashboard drew trajectories without valid feedback\n";
         return 1;
     }
     return 0;
