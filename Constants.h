@@ -44,8 +44,8 @@ static const AxisData kSHOOTER_ZERO_5 = AxisData {.yaw=0.0 , .pitch=0.0};
 static const cv::Scalar blue_low  = cv::Scalar(90, 90, 90);   
 static const cv::Scalar blue_high = cv::Scalar(130, 255, 255);
 // 红色 H 跨两头 分两段
-static const cv::Scalar red_ranges_low[2]  = {cv::Scalar(0, 90, 110),   cv::Scalar(11, 255, 255)};  
-static const cv::Scalar red_ranges_high[2] = {cv::Scalar(168, 90, 110), cv::Scalar(179, 255, 255)};
+static const cv::Scalar red_ranges_low[2]  = {cv::Scalar(0, 90, 90),   cv::Scalar(11, 255, 255)};  
+static const cv::Scalar red_ranges_high[2] = {cv::Scalar(168, 90, 90), cv::Scalar(179, 255, 255)};
 //黄色 
 static const cv::Scalar yellow_low  = cv::Scalar(20, 150, 150);   
 static const cv::Scalar yellow_high = cv::Scalar(50, 255, 255);
@@ -57,10 +57,10 @@ static constexpr std::array<double, 5> kCamDistD{0.01986204680694741, 0.01055574
 static const double kFocalPx = 1300;
 
 //************************************火控参数*************************************** */
-static const double kAIM_TOLERANCE = 1.9;
+static const double kAIM_TOLERANCE = 2.0;
 static const double kAIM_STABLE_FRAMES = 30;
 static const int kPushRetractMs = 200; // 推杆回缩脉冲时长
-static const double kCommandSlewRateDegPerSec = 15; // 绝对角度指令最大变化速度
+static const double kCommandSlewRateDegPerSec = 17; // 绝对角度指令最大变化速度
 
 //************************************拟合参数****************************************** */
 static const int kPOINTS_NUM = 60;
@@ -68,10 +68,12 @@ static const int kMODEL_STABLE_FRAMES = 55;
 static const double kHUBER = 0.08;
 static const double kLAMBDA = 0.4;
 static const double kMAX_RES_TOLERANCE = 0.2;
-static const double kMODEL_RES_TOLERANCE = 0.0020;
+static const double kMODEL_RES_TOLERANCE = 0.0050;
 //目标匹配
 static const units::degree_t kTARGET_MATCH_TOLERANCE = units::degree_t{15.0}; // 目标匹配容差
 static const int kTARGET_HIT_CONFIRM_FRAMES = 20; // 发射后延迟确认当前目标已命中
+static const double kOMEGA_SWITCH_LOCKOUT_MS = 100; // 角速度切换锁定时间，单位毫秒
+static const double kACTIVE_CONFIRM_MS = 200;
 static constexpr std::array<double, 3> kTARGET_OMEGAS{
     std::numbers::pi / 3.0,
     std::numbers::pi / 2.0,

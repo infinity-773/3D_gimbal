@@ -192,6 +192,8 @@ Debouncer modelLockDebouncer(kMODEL_STABLE_FRAMES, DebounceEdge::Rising);
 static CenterEstimator estimator = CenterEstimator(kCENTER_IN_BASE, kTRAJECTORY_RADIUS);
 static frc::Translation3d center = kCENTER_IN_BASE;
 static double omega = kTARGET_OMEGAS[1];
+static bool g_omegaSwitchLockoutActive = false;
+static std::chrono::steady_clock::time_point g_omegaSwitchedAt;
 static TargetMatcher targetMatcher;
 static OmegaEstimator omegaEstimator;
 
@@ -407,8 +409,8 @@ int main()
         sendData.pitch_angle = feedback.pitch_angle;
         sendData.yaw_angle = feedback.yaw_angle;
         // 当前固定协议：左右摩擦轮目标速度、蜂鸣器和推杆标志。
-        sendData.left_speed = 480;
-        sendData.right_speed = 480;
+        sendData.left_speed = 499;
+        sendData.right_speed = 499;
         sendData.buzzer = 0;
         sendData.Push_flag = 1;
 
@@ -537,13 +539,19 @@ int main()
                     0.4, correctedTarget, center, omega, true);
             }
             else
-            {
-                expTarget = *currentTarget;
+            {   if(targetsInBase.empty())
+                {
+                    //do nothing
+                }
+                else
+                {
+                    expTarget = targetsInBase[0];
+                }
             }
         }
   
         AxisData angles = getShootAngles(expTarget);
-        AxisData AnglesWithLead = withLead(angles, -2.5, -3.7);
+        AxisData AnglesWithLead = withLead(angles, -2.4, -3.7);
 
 
 

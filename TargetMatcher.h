@@ -16,6 +16,7 @@ struct TargetMarker
 {
     frc::Translation3d position;
     bool active = false;
+    bool lastFired = false;
 };
 
 class TargetMatcher
@@ -37,6 +38,7 @@ public:
             return;
         }
         initialized_ = true;
+        lastFiredIndex_.reset();
         for (std::size_t i = 0; i < targets_.size(); ++i)
         {
             targets_[i].rotation = frc::Rotation2d{
@@ -52,8 +54,8 @@ public:
 
 
     std::optional<frc::Translation3d> selectAndUpdate(const std::vector<frc::Translation3d>& positions, int now = 0, double omega = 0.0){
-        static std::array<int, 2> lastIndices{-1, -1};
         advanceRotations(now, omega);
+        confirmFiredTargets();
 
         if (positions.empty() || positions.size() > 2)
         {
@@ -64,7 +66,6 @@ public:
 
         if(positions.size() == 1){
             lastIndices = {-1, -1};
-            reset();
             auto matchResult = match(positions.front());
             if (!matchResult) {
                 return std::nullopt;
@@ -83,7 +84,6 @@ public:
             }
             indices[i] = *matchResult;
         }
-        //
         if(indices[0] == last_fired_id)
         {   if(targets_[indices[0]].active == false){ return positions[0]; }
                 targets_[last_fired_id].setState(true);
@@ -97,7 +97,17 @@ public:
             last_fired_id = indices[0];
             lastIndices = indices;
             return positions[0];
-        }
+        }else if(targets_[indices[0]].active == false && targets_[indices[1]].active == true)
+        {
+            lastIndices = indices;
+            last_fired_id = indices[1];
+            return positions[1];
+        }else if(targets_[indices[0]].active == true && targets_[indices[1]].active == false)
+        {
+            lastIndices = indices;
+            last_fired_id = indices[0];
+            return positions[0];
+        }else
 
         if(targets_[indices[0]].active == targets_[indices[1]].active){
             //上一帧没有两个
@@ -111,16 +121,16 @@ public:
             }
             //id0先变化
             if(lastIndices[0] != indices[0] && lastIndices[1] == indices[1]){
-                targets_[indices[0]].setState(true);
-                targets_[indices[1]].setState(false);
-                last_fired_id = indices[0];
+                targets_[lastIndices[0]].active = (true);
+                targets_[indices[1]].active = (false);
+                //last_fired_id = indices[0];
                 lastIndices = indices;
                 return positions[0];
             //id1先变化
             }else if(lastIndices[0] == indices[0] && lastIndices[1] != indices[1]){
-                targets_[indices[0]].setState(false);
-                targets_[indices[1]].setState(true);
-                last_fired_id = indices[1];
+                targets_[indices[0]].active = (false);
+                targets_[lastIndices[1]].active = (true);
+                //last_fired_id = indices[1];
                 lastIndices = indices;
                 return positions[1];
             }
@@ -131,6 +141,40 @@ public:
 
     }
 
+    // 使用“其他目标重新出现”的事件确认命中，不改变 selectAndUpdate 的原逻辑。
+    std::optional<frc::Translation3d> selectAndUpdateByRefresh(
+        const std::vector<frc::Translation3d>& positions,
+        int now = 0,
+        double omega = 0.0)
+    {
+        const auto selected = selectAndUpdate(positions, now, omega);
+        std::array<int, 2> observed{-1, -1};
+        for (std::size_t i = 0; i < positions.size() && i < observed.size(); ++i)
+        {
+            const auto index = match(positions[i]);
+            if (index)
+                observed[i] = static_cast<int>(*index);
+        }
+        updateRefreshConfirmation(now, observed);
+        return selected;
+    }
+
+    void markFiredByRefresh(int now)
+    {
+        if (!recordHitTargets_ || last_fired_id < 0 ||
+            static_cast<std::size_t>(last_fired_id) >= targets_.size())
+        {
+            return;
+        }
+        const auto index = static_cast<std::size_t>(last_fired_id);
+        targets_[index].hasFired = true;
+        targets_[index].activeDebouncer.reset(false);
+        pendingRefreshHitIndex_ = index;
+        pendingRefreshHitAt_ = now;
+        pendingRefreshPrevious_ = refreshObserved_;
+        lastFiredIndex_ = index;
+    }
+
 
     void markFired()
     {
@@ -139,7 +183,10 @@ public:
         {
             return;
         }
-        targets_[static_cast<std::size_t>(last_fired_id)].hasFired = true;
+        const auto index = static_cast<std::size_t>(last_fired_id);
+        targets_[index].hasFired = true;
+        targets_[index].activeDebouncer.reset(false);
+        lastFiredIndex_ = index;
     }
 
     void setRecordHitTargets(bool enabled)
@@ -156,7 +203,16 @@ public:
         for (auto& target : targets_)
         {
             target.active = false;
+            target.hasFired = false;
+            target.activeDebouncer.reset(false);
         }
+        lastIndices = {-1, -1};
+        refreshObserved_ = {-1, -1};
+        pendingRefreshPrevious_ = {-1, -1};
+        pendingRefreshHitIndex_.reset();
+        pendingRefreshHitAt_ = 0;
+        last_fired_id = -1;
+        lastFiredIndex_.reset();
     }
 
     std::vector<TargetMarker> markers(double radius) const
@@ -168,12 +224,14 @@ public:
         }
 
         result.reserve(targets_.size());
-        for (const auto& target : targets_)
+        for (std::size_t i = 0; i < targets_.size(); ++i)
         {
+            const auto& target = targets_[i];
             const frc::Translation2d offset{
                 units::meter_t{radius * target.rotation.Cos()},
                 units::meter_t{radius * target.rotation.Sin()}};
-            result.push_back({ToXYZ(offset, center_), target.active});
+            result.push_back({ToXYZ(offset, center_), target.active,
+                              lastFiredIndex_ == i});
         }
         return result;
     }
@@ -184,6 +242,80 @@ public:
     }
 
 private:
+
+    static bool containsIndex(const std::array<int, 2>& indices, int index)
+    {
+        return indices[0] == index || indices[1] == index;
+    }
+
+    void updateRefreshConfirmation(int now, const std::array<int, 2>& observed)
+    {
+        if (pendingRefreshHitIndex_)
+        {
+            const std::size_t firedIndex = *pendingRefreshHitIndex_;
+            const int elapsedMs = now - pendingRefreshHitAt_;
+
+            if (elapsedMs <= kACTIVE_CONFIRM_MS)
+            {
+                for (const int index : observed)
+                {
+                    if (index < 0 || static_cast<std::size_t>(index) == firedIndex ||
+                        containsIndex(pendingRefreshPrevious_, index))
+                    {
+                        continue;
+                    }
+
+                    targets_[firedIndex].active = true;
+                    targets_[firedIndex].hasFired = false;
+                    targets_[firedIndex].activeDebouncer.reset(true);
+                    targets_[static_cast<std::size_t>(index)].active = false;
+                    pendingRefreshHitIndex_.reset();
+                    if (allActive())
+                        resetRound();
+                    break;
+                }
+            }
+
+            if (pendingRefreshHitIndex_ && elapsedMs >= kACTIVE_CONFIRM_MS)
+            {
+                // 默认仍通过 confirmActive；整个观察窗口内没有其他目标刷新/出现时撤销。
+                targets_[firedIndex].active = false;
+                targets_[firedIndex].hasFired = false;
+                targets_[firedIndex].activeDebouncer.reset(false);
+                pendingRefreshHitIndex_.reset();
+            }
+        }
+
+        refreshObserved_ = observed;
+        pendingRefreshPrevious_ = observed;
+    }
+
+    void confirmFiredTargets()
+    {
+        for (auto& target : targets_)
+        {
+            if (target.hasFired)
+                target.setState(true);
+        }
+        if (allActive())
+            resetRound();
+    }
+
+    void resetRound()
+    {
+        for (auto& target : targets_)
+        {
+            target.active = false;
+            target.hasFired = false;
+            target.activeDebouncer.reset(false);
+        }
+        lastIndices = {-1, -1};
+        refreshObserved_ = {-1, -1};
+        pendingRefreshPrevious_ = {-1, -1};
+        pendingRefreshHitIndex_.reset();
+        pendingRefreshHitAt_ = 0;
+        last_fired_id = -1;
+    }
 
     struct Target
     {
@@ -317,7 +449,12 @@ private:
     int lastUpdateAt_ = 0;
     std::optional<std::size_t> currentIndex_;
     std::optional<std::size_t> pendingHitIndex_;
-    int pendingHitAt_ = 0;
+    std::optional<std::size_t> lastFiredIndex_;
+    std::optional<std::size_t> pendingRefreshHitIndex_;
+    std::array<int, 2> refreshObserved_{-1, -1};
+    std::array<int, 2> pendingRefreshPrevious_{-1, -1};
+    int pendingRefreshHitAt_ = 0;
+    std::array<int, 2> lastIndices{-1, -1};
     bool initialized_ = false;
     bool recordHitTargets_ = true;
     bool anti_ = true;

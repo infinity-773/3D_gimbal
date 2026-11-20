@@ -5,10 +5,9 @@
 依赖 CMake、C++20 和 OpenCV；FRC 几何类型由仓库内的 `turret_kinematics` 提供。
 
 ```sh
-cmake -S . -B /tmp/energy-gimbal-build
-cmake --build /tmp/energy-gimbal-build --target vision_gimbal test_energy_gimbal
-ctest --test-dir /tmp/energy-gimbal-build -R '^energy_gimbal$' --output-on-failure
-/tmp/energy-gimbal-build/vision_gimbal
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target vision_gimbal -j
+./build/vision_gimbal
 ```
 
 主程序入口为 `vision_gimbal.cpp`，保留原例程的相机和串口基础设施。默认相机 `/dev/video0`、串口 `/dev/ttyUSB_vision`；`F` 切换开火，`C` 切换颜色，`Q` 或 Esc 退出。开火默认关闭。反馈不新鲜、晚于帧到达时间或缺失时不生成有效观测；原发送线程仍会发送零增量、推杆保持、摩擦轮零速命令，需确认下位机对该命令的实际行为，并另设通信超时保护。

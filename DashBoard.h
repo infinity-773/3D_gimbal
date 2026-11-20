@@ -185,12 +185,16 @@ public:
 				if (!pixel)
 					continue;
 				const cv::Point point(cvRound(pixel->x), cvRound(pixel->y));
-				const cv::Scalar color = marker.active
-					? cv::Scalar(0, 0, 255)
-					: cv::Scalar(255, 0, 0);
-				cv::drawMarker(image, point, color, cv::MARKER_CROSS, 24, 2);
+				const cv::Scalar stateColor = marker.active
+					? cv::Scalar(0, 0, 255) : cv::Scalar(255, 0, 0);
+				if (marker.lastFired)
+					cv::circle(image, point, 18, cv::Scalar(0, 165, 255), 2);
+				cv::drawMarker(image, point, stateColor, cv::MARKER_CROSS, 24, 2);
 				cv::putText(image, marker.active ? "HIT" : "OPEN", point + cv::Point(12, -10),
-					cv::FONT_HERSHEY_SIMPLEX, 0.38, color, 1);
+					cv::FONT_HERSHEY_SIMPLEX, 0.38, stateColor, 1);
+				if (marker.lastFired)
+					cv::putText(image, "LAST FIRED", point + cv::Point(12, 18),
+						cv::FONT_HERSHEY_SIMPLEX, 0.38, cv::Scalar(0, 165, 255), 1);
 			}
 		}
 	}
@@ -272,11 +276,11 @@ private:
 
 	static void drawLegend(cv::Mat& image)
 	{
-		if (image.cols < 226 || image.rows < 106)
+		if (image.cols < 226 || image.rows < 126)
 			return;
 		const int x = image.cols - 216;
-		const int y = image.rows - 96;
-		cv::rectangle(image, cv::Rect(x - 10, y - 10, 216, 96), cv::Scalar(0, 0, 0), cv::FILLED);
+		const int y = image.rows - 116;
+		cv::rectangle(image, cv::Rect(x - 10, y - 10, 216, 116), cv::Scalar(0, 0, 0), cv::FILLED);
 		cv::circle(image, cv::Point(x + 4, y + 6), 4, cv::Scalar(0, 255, 0), -1);
 		cv::putText(image, "AIM   impact point", cv::Point(x + 16, y + 11),
 					cv::FONT_HERSHEY_SIMPLEX, 0.42, cv::Scalar(0, 255, 0), 1);
@@ -293,6 +297,10 @@ private:
 			cv::MARKER_CROSS, 10, 2);
 		cv::putText(image, "HIT", cv::Point(x + 94, y + 87),
 			cv::FONT_HERSHEY_SIMPLEX, 0.38, cv::Scalar(0, 0, 255), 1);
+		cv::circle(image, cv::Point(x + 4, y + 101), 6,
+			cv::Scalar(0, 165, 255), 2);
+		cv::putText(image, "LAST FIRED", cv::Point(x + 16, y + 106),
+			cv::FONT_HERSHEY_SIMPLEX, 0.38, cv::Scalar(0, 165, 255), 1);
 	}
 
 	void saveImages(const cv::Mat& image, const cv::Mat& mask)
