@@ -10,6 +10,7 @@
 #include <optional>
 #include <utility>
 #include <vector>
+#include <Debouncer.h>
 
 struct TargetMarker
 {
@@ -29,7 +30,7 @@ public:
         currentIndex_.reset();
         reset();
 
-        const auto rotation = ToYZ(firstPosition, center_).Angle();
+        const auto rotation = posToangle(firstPosition);
         if (!rotation)
         {
             initialized_ = false;
@@ -43,89 +44,102 @@ public:
         }
     }
 
+
     void updateCenter(const frc::Translation3d& modelCenter)
     {
         center_ = modelCenter;
     }
 
-    std::optional<frc::Translation3d> select(
-        const std::vector<frc::Translation3d>& positions,
-        int now = 0, double omega = 0.0)
-    {
-        currentIndex_.reset();
+
+    std::optional<frc::Translation3d> selectAndUpdate(const std::vector<frc::Translation3d>& positions, int now = 0, double omega = 0.0){
+        static std::array<int, 2> lastIndices{-1, -1};
         advanceRotations(now, omega);
-        updatePendingHit(now);
-        if (!initialized_ || positions.empty())
+
+        if (positions.empty() || positions.size() > 2)
         {
+            lastIndices = {-1, -1};
             return std::nullopt;
         }
+        syncAngles(positions);
 
-        if (allActive())
-        {
+        if(positions.size() == 1){
+            lastIndices = {-1, -1};
             reset();
-        }
-
-        std::optional<std::size_t> anchorIndex;
-        const frc::Translation3d* anchorPosition = nullptr;
-        double anchorDelta = std::numeric_limits<double>::max();
-        for (const auto& position : positions)
-        {
-            const auto candidate = match(position);
-            if (!candidate)
-            {
-                continue;
-            }
-            const auto [index, delta] = *candidate;
-            if (delta < anchorDelta)
-            {
-                anchorDelta = delta;
-                anchorIndex = index;
-                anchorPosition = &position;
+            auto matchResult = match(positions.front());
+            if (!matchResult) {
+                return std::nullopt;
+            }else{
+                last_fired_id = *matchResult;
+                return positions.front();
             }
         }
 
-        if (!anchorIndex)
-        {
-            return std::nullopt;
-        }
-        syncAngles(*anchorPosition, *anchorIndex);
-
-        std::optional<std::size_t> bestIndex;
-        const frc::Translation3d* bestPosition = nullptr;
-        double bestDelta = std::numeric_limits<double>::max();
-        for (const auto& position : positions)
-        {
-            const auto candidate = match(position);
-            if (!candidate)
-            {
-                continue;
+        std::array<int, 2> indices{-1, -1};
+        for(int i = 0; i < positions.size(); ++i){
+            auto matchResult = match(positions[i]);
+            if (!matchResult) {
+                lastIndices = {-1, -1};
+                return std::nullopt;
             }
-            const auto [index, delta] = *candidate;
-            if ((recordHitTargets_ && targets_[index].active) || delta >= bestDelta)
-            {
-                continue;
-            }
-            bestDelta = delta;
-            bestIndex = index;
-            bestPosition = &position;
+            indices[i] = *matchResult;
+        }
+        //
+        if(indices[0] == last_fired_id)
+        {   if(targets_[indices[0]].active == false){ return positions[0]; }
+                targets_[last_fired_id].setState(true);
+                last_fired_id = indices[1];
+                lastIndices = indices;
+                return positions[1];
+        }else if(indices[1] == last_fired_id)
+        {
+            if(targets_[indices[1]].active == false){ return positions[1]; }
+            targets_[last_fired_id].setState(true);
+            last_fired_id = indices[0];
+            lastIndices = indices;
+            return positions[0];
         }
 
-        if (!bestIndex)
-        {
-            return std::nullopt;
+        if(targets_[indices[0]].active == targets_[indices[1]].active){
+            //上一帧没有两个
+            if(lastIndices[0]==-1 or lastIndices[1]==-1)
+            {
+                lastIndices = indices;
+                return std::nullopt;
+            }// 还没有变化
+            if(lastIndices[0] == indices[0] && lastIndices[1] == indices[1]){
+                return std::nullopt;
+            }
+            //id0先变化
+            if(lastIndices[0] != indices[0] && lastIndices[1] == indices[1]){
+                targets_[indices[0]].setState(true);
+                targets_[indices[1]].setState(false);
+                last_fired_id = indices[0];
+                lastIndices = indices;
+                return positions[0];
+            //id1先变化
+            }else if(lastIndices[0] == indices[0] && lastIndices[1] != indices[1]){
+                targets_[indices[0]].setState(false);
+                targets_[indices[1]].setState(true);
+                last_fired_id = indices[1];
+                lastIndices = indices;
+                return positions[1];
+            }
         }
-        currentIndex_ = bestIndex;
-        return *bestPosition;
+
+
+        return std::nullopt;
+
     }
 
-    void markFiredAt(int now)
+
+    void markFired()
     {
-        if (!recordHitTargets_ || !currentIndex_)
+        if (!recordHitTargets_ || last_fired_id < 0 ||
+            static_cast<std::size_t>(last_fired_id) >= targets_.size())
         {
             return;
         }
-        pendingHitIndex_ = currentIndex_;
-        pendingHitAt_ = now;
+        targets_[static_cast<std::size_t>(last_fired_id)].hasFired = true;
     }
 
     void setRecordHitTargets(bool enabled)
@@ -143,8 +157,6 @@ public:
         {
             target.active = false;
         }
-        pendingHitIndex_.reset();
-        pendingHitAt_ = 0;
     }
 
     std::vector<TargetMarker> markers(double radius) const
@@ -172,11 +184,33 @@ public:
     }
 
 private:
+
     struct Target
     {
         frc::Rotation2d rotation;
         bool active = false;
+        bool hasFired = false;
+        Debouncer activeDebouncer = Debouncer(kTARGET_HIT_CONFIRM_FRAMES , DebounceEdge::Rising);
+
+        void setState(bool isactive)
+        {
+            if (!hasFired)
+            {
+                return;
+            }
+            const bool wasActive = active;
+             active = activeDebouncer.update(isactive);
+             if (!wasActive && active)
+             {
+                hasFired = false;
+             }
+        }
     };
+
+    std::optional<frc::Rotation2d> posToangle(const frc::Translation3d& position) const
+    {
+        return ToYZ(position, center_).Angle();
+    }
 
     void advanceRotations(int now, double omega )
     {
@@ -192,50 +226,66 @@ private:
         lastUpdateAt_ = now;
     }
 
-    void updatePendingHit(int now)
+
+    bool syncAngles(const std::vector<frc::Translation3d>& positions)
     {
-        if (!pendingHitIndex_ || !recordHitTargets_ ||
-            now - pendingHitAt_ < kTARGET_HIT_CONFIRM_MS)
+        std::optional<std::size_t> anchorIndex;
+        const frc::Translation3d* anchorPosition = nullptr;
+        double anchorDelta = std::numeric_limits<double>::max();
+        for (const auto& position : positions)
         {
-            return;
+            const auto candidate = match(position);
+            if (!candidate)
+            {
+                continue;
+            }
+            const auto rotation = posToangle(position);
+            if (!rotation)
+            {
+                continue;
+            }
+            const auto index = *candidate;
+            const double delta =
+                absRotation(*rotation - targets_[index].rotation).Degrees().value();
+            if (delta < anchorDelta)
+            {
+                anchorDelta = delta;
+                anchorIndex = index;
+                anchorPosition = &position;
+            }
         }
 
-        targets_[*pendingHitIndex_].active = true;
-        pendingHitIndex_.reset();
-        pendingHitAt_ = 0;
-        if (allActive())
+        if (!anchorIndex)
         {
-            reset();
+            return false;
         }
-    }
 
-    void syncAngles(const frc::Translation3d& observed, std::size_t observedIndex)
-    {
-        const auto rotation = ToYZ(observed, center_).Angle();
+        const auto rotation = posToangle(*anchorPosition);
         if (!rotation)
         {
-            return;
+            return false;
         }
 
         for (std::size_t i = 0; i < targets_.size(); ++i)
         {
             const double slotOffset =
                 static_cast<double>(static_cast<int>(i) -
-                                     static_cast<int>(observedIndex)) * 72.0;
+                                     static_cast<int>(*anchorIndex)) * 72.0;
             targets_[i].rotation = frc::Rotation2d{
                 rotation->Degrees() + units::degree_t{slotOffset}};
         }
+        return true;
     }
 
-    std::optional<std::pair<std::size_t, double>> match(
+    std::optional<std::size_t> match(
         const frc::Translation3d& position) const
     {
-        const auto rotation = ToYZ(position, center_).Angle();
+        const auto rotation = posToangle(position);
         if (!rotation)
         {
             return std::nullopt;
         }
-        std::optional<std::pair<std::size_t, double>> bestMatch;
+        std::optional<std::size_t> bestMatch;
         double minDelta = std::numeric_limits<double>::max();
         for (std::size_t i = 0; i < targets_.size(); ++i)
         {
@@ -244,7 +294,7 @@ private:
             if (delta <= kTARGET_MATCH_TOLERANCE.value() && delta < minDelta)
             {
                 minDelta = delta;
-                bestMatch = std::pair{i, delta};
+                bestMatch = i;
             }
         }
         return bestMatch;
@@ -271,6 +321,7 @@ private:
     bool initialized_ = false;
     bool recordHitTargets_ = true;
     bool anti_ = true;
+    int last_fired_id = -1;
 };
 
 #endif // TARGET_MATCHER_H

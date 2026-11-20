@@ -71,7 +71,7 @@ static const double kMAX_RES_TOLERANCE = 0.2;
 static const double kMODEL_RES_TOLERANCE = 0.0020;
 //目标匹配
 static const units::degree_t kTARGET_MATCH_TOLERANCE = units::degree_t{15.0}; // 目标匹配容差
-static const int kTARGET_HIT_CONFIRM_MS = 300; // 发射后延迟确认当前目标已命中
+static const int kTARGET_HIT_CONFIRM_FRAMES = 20; // 发射后延迟确认当前目标已命中
 static constexpr std::array<double, 3> kTARGET_OMEGAS{
     std::numbers::pi / 3.0,
     std::numbers::pi / 2.0,

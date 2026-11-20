@@ -184,7 +184,7 @@ static double g_commandYaw = 0.0;
 static double g_commandPitch = 0.0;
 static bool hasYellow = true;
 bool useOmega = true; // 是否使用模型预测
-bool recordHitTargets = true; // 是否记录已击打目标；关闭后所有目标始终视为未激活
+bool ifRecordHit = true; // 是否记录已击打目标；关闭后所有目标始终视为未激活
 
 
 
@@ -514,11 +514,11 @@ int main()
             }
         }
         
-        targetMatcher.setRecordHitTargets(recordHitTargets);
+        targetMatcher.setRecordHitTargets(ifRecordHit);
         std::optional<frc::Translation3d> currentTarget;
         if (g_modelAccepted && !hasYellow)
         {
-            currentTarget = targetMatcher.select(targetsInBase, controllerNow, omega);
+            currentTarget = targetMatcher.selectAndUpdate(targetsInBase, controllerNow, omega);
         }
         if (g_modelAccepted && currentTarget &&
             omegaEstimator.updateOmega(controllerNow, *currentTarget, center))
@@ -582,7 +582,7 @@ int main()
             frameReceivedAt);
         if (g_shotsFired > shotsBeforeFire)
         {
-            targetMatcher.markFiredAt(controllerNow);
+            targetMatcher.markFired();
         }
 
 
