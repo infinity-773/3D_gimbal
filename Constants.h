@@ -26,9 +26,9 @@ static const frc::Translation3d kYAW_AXIS_IN_BASE{0.010, 0.0, 0.0};
 static const frc::Translation3d kCAM_IN_YAW{0.00934 , 0 , 0.1102};
 static const frc::Translation3d kSHOOTER_IN_BASE{0 , 0 , 0.0622};
 static constexpr frc::Translation3d kCAM_IN_SHOOTER = kCAM_IN_YAW - kSHOOTER_IN_BASE;  //使用自定义 “-” 操作符
-static const frc::Translation3d kCENTER_IN_BASE{2.0 , -0.03 , 0.160};
+static const frc::Translation3d kCENTER_IN_BASE{2.0 , -0.03 , 0.290};
 //轨迹半径
-static const double kTRAJECTORY_RADIUS = 0.215;
+static const double kTRAJECTORY_RADIUS = 0.210;
 static const double kSTATIC_OMEGA = std::numbers::pi / 3;
 
 //********************************炮台零点偏移 ；feedBack + offset = trueDegs************************************/
@@ -41,14 +41,14 @@ static const AxisData kSHOOTER_ZERO_5 = AxisData {.yaw=0.0 , .pitch=0.0};
 
 //***************************************HSV****************************************** */
 // 蓝色
-static const cv::Scalar blue_low  = cv::Scalar(90, 90, 90);   
-static const cv::Scalar blue_high = cv::Scalar(130, 255, 255);
+static const cv::Scalar blue_low  = cv::Scalar(70, 15, 15);   
+static const cv::Scalar blue_high = cv::Scalar(180, 255, 255);
 // 红色 H 跨两头 分两段
-static const cv::Scalar red_ranges_low[2]  = {cv::Scalar(0, 90, 90),   cv::Scalar(11, 255, 255)};  
-static const cv::Scalar red_ranges_high[2] = {cv::Scalar(168, 90, 90), cv::Scalar(179, 255, 255)};
+static const cv::Scalar red_ranges_low[2]  = {cv::Scalar(0, 130, 40),   cv::Scalar(11, 255, 255)};  
+static const cv::Scalar red_ranges_high[2] = {cv::Scalar(168, 130, 40), cv::Scalar(180, 255, 255)};
 //黄色 
-static const cv::Scalar yellow_low  = cv::Scalar(20, 150, 150);   
-static const cv::Scalar yellow_high = cv::Scalar(50, 255, 255);
+static const cv::Scalar yellow_low  = cv::Scalar(5, 50, 30);   
+static const cv::Scalar yellow_high = cv::Scalar(50, 180, 200);
 
 //************************************相机参数********************************** */
  // 畸变系数，无量纲
@@ -57,16 +57,16 @@ static constexpr std::array<double, 5> kCamDistD{0.01986204680694741, 0.01055574
 static const double kFocalPx = 1300;
 
 //************************************火控参数*************************************** */
-static const double kAIM_TOLERANCE = 2.0;
-static const double kAIM_STABLE_FRAMES = 30;// dont change this
-static const int kPushRetractMs = 100; // 推杆回缩脉冲时长
+static const double kAIM_TOLERANCE = 1.5; // 允许的瞄准误差，单位 deg
+static const double kAIM_STABLE_FRAMES = 25;// dont change this
+static const int kPushRetractMs = 110; // 推杆回缩脉冲时长
 static const double kCommandSlewRateDegPerSec = 15; // 绝对角度指令最大变化速度
 
 //************************************拟合参数****************************************** */
 static const int kPOINTS_NUM = 60;
 static const int kMODEL_STABLE_FRAMES = 55;
 static const double kHUBER = 0.08;
-static const double kLAMBDA = 0.4;
+static const double kLAMBDA = 0.3;
 static const double kMAX_RES_TOLERANCE = 0.2;
 static const double kMODEL_RES_TOLERANCE = 0.0050;
 //目标匹配

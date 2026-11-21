@@ -49,6 +49,7 @@ int main()
     frame.targetProjectionValid = true;
     frame.center = {0.0, 0.0, -1.0};
     frame.predictedTarget = frame.center;
+    frame.trueTarget = frame.center;
     dashboard.updateLog(frame);
     dashboard.draw(image, frame, CameraProjection{});
     if (cv::norm(image, cv::NORM_L1) == 0)

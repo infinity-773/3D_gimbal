@@ -209,11 +209,16 @@ cv::Point2f getTargetCenter(const cv::Rect& box)
 }
 
 
-bool hasYellowRing(const cv::Mat& frame){
-
-    cv::Mat mask;
+bool hasYellowRing(const cv::Mat& frame, cv::Mat& mask)
+{
     std::vector<cv::Rect> boxes = detectColorRing(frame, mask, true);
     return !boxes.empty();
+}
+
+bool hasYellowRing(const cv::Mat& frame)
+{
+    cv::Mat mask;
+    return hasYellowRing(frame, mask);
 }
 
 }

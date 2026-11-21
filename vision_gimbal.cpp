@@ -110,7 +110,7 @@ int cameraBrightness = 10;
 // 对比度
 // 范围：0～100，步长 1，默认 35。
 // 作用：调整明暗区域的差别。
-int cameraContrast = 55;
+int cameraContrast = 45;
 
 // 伽马
 // 范围：100～500，步长 1，默认 300。
@@ -128,7 +128,7 @@ int cameraBacklight = 2;
 // 饱和度
 // 范围：0～100，步长 1，默认 64。
 // 作用：调整颜色浓淡，会影响 HSV 阈值。
-int cameraSaturation = 100;
+int cameraSaturation = 64;
 
 // 色调
 // 范围：-180～180，步长 1，默认 0。
@@ -421,6 +421,7 @@ int main()
 
         // 找环
         cv::Mat mask;
+        cv::Mat yellowMask;
         std::vector<cv::Rect> rings = detectColorRing(image, mask,false);
         //取目标点
         std::vector<TargetPx> targetsPx =
@@ -462,7 +463,7 @@ int main()
             }();
 
         static bool previousHasYellow = false;
-        hasYellow = hasYellowRing(image);
+        hasYellow = hasYellowRing(image, yellowMask);
         const bool yellowAppeared = hasYellow && !previousHasYellow;
         previousHasYellow = hasYellow;
         if (yellowAppeared)
@@ -473,7 +474,7 @@ int main()
             targetMatcher.reset();
             omegaEstimator.reset();
             omega = kTARGET_OMEGAS[1];
-            std::cout << "检测到黄色目标，模型解锁并清空拟合历史。\n";
+            std::cout << "检测到黄色目标,已清空拟合历史。\n";
         }
 
         const int controllerNow = static_cast<int>(
@@ -568,6 +569,11 @@ int main()
         AxisData angles = getShootAngles(expTarget);
         AxisData AnglesWithLead = withLead(angles, 1.5, -2.5);
 
+        frc::Translation3d trueTarget = AimSolver::getPhaseAtTime(
+            0.15, expTarget, center, omega, false);
+
+        AxisData trueAngle = withLead(getShootAngles(trueTarget), 1.5, -2.5);
+
 
 
 
@@ -600,7 +606,7 @@ int main()
         sendData.Push_flag = updateFireControl(
             aimTargetValid && !omegaFireBlocked,
             feedbackValid,
-            AnglesWithLead,
+            trueAngle, //使用舵机实际能赶到的点
             feedback,
             frameReceivedAt);
         if (g_shotsFired > shotsBeforeFire)
@@ -636,6 +642,7 @@ int main()
             .matchedOmega = omega,
             .omegaReady = omegaEstimator.ready(),
             .predictedTarget = expTarget,
+            .trueTarget = trueTarget,
             .gimbalAngles = {units::degree_t{feedback.pitch_angle}, units::degree_t{feedback.yaw_angle}},
             .feedback = feedback,
             .command = sendData,
@@ -644,7 +651,7 @@ int main()
         dashboard.updateLog(dashboardFrame);
         dashboard.setLogField("omega fire block", omegaFireBlocked ? "yes" : "no");
         dashboard.draw(image, dashboardFrame, projection);
-        dashboard.show(image, mask);
+        dashboard.show(image, mask, yellowMask);
         if (!dashboard.processKeys(image, mask, kEnableFire, kTargetColor))
             break;
             

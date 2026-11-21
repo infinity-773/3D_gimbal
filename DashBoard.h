@@ -44,6 +44,7 @@ struct DashboardFrame
 	double matchedOmega;
 	bool omegaReady;
 	frc::Translation3d predictedTarget;
+	frc::Translation3d trueTarget;
 	GimbalAngles gimbalAngles;
 	TRoMaC::GimbalFeedback feedback;
 	TRoMaC::VisionData command;
@@ -108,6 +109,8 @@ public:
 			? cv::format("%.2f / %.2f", frame.angles.yaw, frame.angles.pitch) : "n/a");
 		setLogField("lead yaw / pitch", frame.targetProjectionValid
 			? cv::format("%.2f / %.2f", frame.leadAngles.yaw, frame.leadAngles.pitch) : "n/a");
+		setLogField("true target (m)", cv::format("%.3f, %.3f, %.3f",
+			frame.trueTarget.X().value(), frame.trueTarget.Y().value(), frame.trueTarget.Z().value()));
 		setLogField("residual", frame.residual);
 		setLogField("center (m)", cv::format("%.3f, %.3f, %.3f", frame.center.X().value(),
 											frame.center.Y().value(), frame.center.Z().value()));
@@ -170,6 +173,16 @@ public:
 					cv::putText(image, "PRED", point + cv::Point(14, -12),
 								cv::FONT_HERSHEY_SIMPLEX, 0.45, cv::Scalar(255, 0, 255), 1);
 				}
+				const auto truePoint = projection.worldToPixel(frame.trueTarget, frame.gimbalAngles);
+				if (truePoint)
+				{
+					const cv::Point point(cvRound(truePoint->x), cvRound(truePoint->y));
+					cv::drawMarker(image, point, cv::Scalar(255, 255, 255),
+								   cv::MARKER_CROSS, 20, 2);
+					cv::putText(image, "TRUE", point + cv::Point(14, -12),
+								cv::FONT_HERSHEY_SIMPLEX, 0.45,
+								cv::Scalar(255, 255, 255), 1);
+				}
 			}
 		}
 		if (showDebug_)
@@ -199,13 +212,17 @@ public:
 		}
 	}
 
-	void show(const cv::Mat& image, const cv::Mat& mask) const
+	void show(const cv::Mat& image, const cv::Mat& mask,
+			  const cv::Mat& yellowMask) const
 	{
 		cv::namedWindow("Camera", cv::WINDOW_NORMAL);
 		cv::imshow("Camera", image);
 		cv::imshow("Log", renderLog());
 		if (showDebug_)
+		{
 			cv::imshow("Mask", mask);
+			cv::imshow("Yellow Mask", yellowMask);
+		}
 	}
 
 	bool handleKey(int key, const cv::Mat& image, const cv::Mat& mask,
@@ -219,7 +236,10 @@ public:
 		{
 			showDebug_ = !showDebug_;
 			if (!showDebug_)
+			{
 				cv::destroyWindow("Mask");
+				cv::destroyWindow("Yellow Mask");
+			}
 		}
 		else if (key == 'f' || key == 'F')
 		{
