@@ -1,5 +1,5 @@
-#ifndef PIXEL_TO_WORLD_H_
-#define PIXEL_TO_WORLD_H_
+#ifndef CAMERA_PROJECTION_H_
+#define CAMERA_PROJECTION_H_
 
 #include <array>
 #include <optional>
@@ -7,7 +7,7 @@
 #include <opencv2/core.hpp>
 #include <turret_kinematics/Pose3d.h>
 
-struct PixelToWorldConfig
+struct CameraProjectionConfig
 {
     // Camera intrinsics in pixels.
     double fx;
@@ -16,11 +16,15 @@ struct PixelToWorldConfig
     double cy;
     std::array<double, 5> distortion{};
 
-    // Camera pose expressed in the gimbal frame.
-    turret_kinematics::Transform3d cameraInGimbal;
+    // Transform from the gimbal frame to the camera frame.
+    turret_kinematics::Transform3d gimbalToCamera;
 
-    // Gimbal rotation center expressed in the world frame.
+    // Pitch-axis origin expressed in the world frame.
     turret_kinematics::Translation3d gimbalOriginInWorld;
+
+    // Yaw-axis origin expressed in the pitch frame. Pitch rotation therefore
+    // moves the yaw axis in world coordinates, while yaw rotates the camera.
+    turret_kinematics::Translation3d yawOriginInPitchFrame;
 
     // Target plane in world coordinates: normal dot (X - point) = 0.
     std::array<double, 3> targetPlaneNormalWorld;
@@ -36,7 +40,7 @@ struct PixelToWorldConfig
 
     bool requireIntersectionInFront;
 
-    PixelToWorldConfig();
+    CameraProjectionConfig();
 };
 
 struct GimbalAngles
@@ -45,16 +49,16 @@ struct GimbalAngles
     units::degree_t yaw{0.0};
 };
 
-class PixelToWorld
+class CameraProjection
 {
 public:
-    explicit PixelToWorld(const PixelToWorldConfig& config = PixelToWorldConfig());
+    explicit CameraProjection(const CameraProjectionConfig& config = CameraProjectionConfig());
 
-    void setConfig(const PixelToWorldConfig& config);
-    const PixelToWorldConfig& config() const;
-    PixelToWorldConfig& config();
+    void setConfig(const CameraProjectionConfig& config);
+    const CameraProjectionConfig& config() const;
+    CameraProjectionConfig& config();
 
-    std::optional<turret_kinematics::Translation3d> projectPixelToWorld(
+    std::optional<turret_kinematics::Translation3d> pixelToWorld(
         const cv::Point2d& pixel,
         const GimbalAngles& gimbalAngles) const;
 
@@ -63,7 +67,7 @@ public:
         const GimbalAngles& angles) const;
 
 private:
-    PixelToWorldConfig config_;
+    CameraProjectionConfig config_;
 };
 
-#endif // PIXEL_TO_WORLD_H_
+#endif // CAMERA_PROJECTION_H_

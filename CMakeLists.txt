@@ -16,7 +16,7 @@ add_executable(vision_gimbal
     Debouncer.cpp
     PIDController.cpp
     MathUtils.cpp
-    PixelToWorld.cpp)
+    CameraProjection.cpp)
 target_include_directories(vision_gimbal PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/Serial
@@ -26,9 +26,15 @@ target_link_libraries(vision_gimbal PRIVATE
 
 include(CTest)
 if(BUILD_TESTING)
-    add_executable(test_pixel_to_world tests/test_pixel_to_world.cpp PixelToWorld.cpp)
-    target_include_directories(test_pixel_to_world PRIVATE
+    add_executable(test_camera_projection tests/test_camera_projection.cpp CameraProjection.cpp)
+    target_include_directories(test_camera_projection PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR} ${OpenCV_INCLUDE_DIRS})
-    target_link_libraries(test_pixel_to_world PRIVATE ${OpenCV_LIBS} turret_kinematics)
-    add_test(NAME pixel_to_world COMMAND test_pixel_to_world)
+    target_link_libraries(test_camera_projection PRIVATE ${OpenCV_LIBS} turret_kinematics)
+    add_test(NAME camera_projection COMMAND test_camera_projection)
+
+    add_executable(test_dashboard tests/test_dashboard.cpp CameraProjection.cpp Debouncer.cpp)
+    target_include_directories(test_dashboard PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/Serial ${OpenCV_INCLUDE_DIRS})
+    target_link_libraries(test_dashboard PRIVATE ${OpenCV_LIBS} turret_kinematics)
+    add_test(NAME dashboard COMMAND test_dashboard)
 endif()

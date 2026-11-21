@@ -1,4 +1,4 @@
-#include "PixelToWorld.h"
+#include "CameraProjection.h"
 
 #include <cmath>
 #include <iostream>
@@ -8,17 +8,20 @@
 
 int main()
 {
-    PixelToWorldConfig config;
+    CameraProjectionConfig config;
     config.fx = 1300.0;
     config.fy = 1250.0;
     config.cx = 640.0;
     config.cy = 360.0;
 
     const GimbalAngles angles{units::degree_t{8.0}, units::degree_t{-12.0}};
-    const turret_kinematics::Pose3d gimbalPose{
+    const turret_kinematics::Pose3d pitchPose{
         config.gimbalOriginInWorld,
-        turret_kinematics::Rotation3d{0.0, 8.0 * CV_PI / 180.0, -12.0 * CV_PI / 180.0}};
-    const auto cameraPose = gimbalPose.TransformBy(config.cameraInGimbal);
+        turret_kinematics::Rotation3d{0.0, 8.0 * CV_PI / 180.0, 0.0}};
+    const auto yawPose = pitchPose.TransformBy(turret_kinematics::Transform3d{
+        config.yawOriginInPitchFrame,
+        turret_kinematics::Rotation3d{0.0, 0.0, -12.0 * CV_PI / 180.0}});
+    const auto cameraPose = yawPose.TransformBy(config.gimbalToCamera);
     const turret_kinematics::Translation3d pointInCamera{0.55, -0.4, 2.0};
     const auto expected = cameraPose.Translation() + pointInCamera.RotateBy(cameraPose.Rotation());
     config.targetPlanePointWorld = expected;
@@ -36,8 +39,8 @@ int main()
         std::vector<cv::Point2d> pixels;
         cv::projectPoints(std::vector<cv::Point3d>{{0.55, -0.4, 2.0}},
                           cv::Vec3d{}, cv::Vec3d{}, cameraMatrix, distortion, pixels);
-        const PixelToWorld converter{config};
-        const auto actual = converter.projectPixelToWorld(pixels[0], angles);
+        const CameraProjection converter{config};
+        const auto actual = converter.pixelToWorld(pixels[0], angles);
         if (!actual || (expected - *actual).Norm().value() > 1e-8)
         {
             std::cerr << "Pixel-to-world distortion round trip failed\n";

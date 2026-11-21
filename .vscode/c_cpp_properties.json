@@ -6,7 +6,9 @@
                 "${workspaceFolder}/**",
                 "${workspaceFolder}/Serial",
                 "/usr/include",
-                "/usr/include/opencv4"
+                "/usr/include/opencv4",
+                "/usr/local/include",
+                "/usr/local/include/opencv4"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/g++",

@@ -1,4 +1,4 @@
-#include "PixelToWorld.h"
+#include "CameraProjection.h"
 
 #include <cmath>
 #include <vector>
@@ -19,13 +19,14 @@ double norm3(const std::array<double, 3>& v)
 }
 } // namespace
 
-PixelToWorldConfig::PixelToWorldConfig()
+CameraProjectionConfig::CameraProjectionConfig()
     : fx(1300.0),
       fy(1300.0),
-      cameraInGimbal{
+      gimbalToCamera{
           turret_kinematics::Translation3d{0.0, 0.0, 0.0},
           turret_kinematics::Rotation3d::FromDegrees(-90.0, 0.0, -90.0)},
       gimbalOriginInWorld{0.0, 0.0, 0.0},
+      yawOriginInPitchFrame{0.0, 0.0, 0.0},
       targetPlaneNormalWorld{1.0, 0.0, 0.0},
       targetPlanePointWorld{2.0, 0.0, 0.0},
       yawOffset{0.0},
@@ -36,27 +37,27 @@ PixelToWorldConfig::PixelToWorldConfig()
 {
 }
 
-PixelToWorld::PixelToWorld(const PixelToWorldConfig& config)
+CameraProjection::CameraProjection(const CameraProjectionConfig& config)
     : config_(config)
 {
 }
 
-void PixelToWorld::setConfig(const PixelToWorldConfig& config)
+void CameraProjection::setConfig(const CameraProjectionConfig& config)
 {
     config_ = config;
 }
 
-const PixelToWorldConfig& PixelToWorld::config() const
+const CameraProjectionConfig& CameraProjection::config() const
 {
     return config_;
 }
 
-PixelToWorldConfig& PixelToWorld::config()
+CameraProjectionConfig& CameraProjection::config()
 {
     return config_;
 }
 
-std::optional<turret_kinematics::Translation3d> PixelToWorld::projectPixelToWorld(
+std::optional<turret_kinematics::Translation3d> CameraProjection::pixelToWorld(
     const cv::Point2d& pixel,
     const GimbalAngles& gimbalAngles) const
 {
@@ -74,11 +75,15 @@ std::optional<turret_kinematics::Translation3d> PixelToWorld::projectPixelToWorl
     const double pitchRadians =
         config_.pitchSign * (gimbalAngles.pitch.value() + config_.pitchOffset.value()) * kPi / 180.0;
 
-    const turret_kinematics::Pose3d gimbalPoseInWorld{
+    const turret_kinematics::Pose3d pitchPoseInWorld{
         config_.gimbalOriginInWorld,
-        turret_kinematics::Rotation3d{0.0, pitchRadians, yawRadians}};
+        turret_kinematics::Rotation3d{0.0, pitchRadians, 0.0}};
+    const turret_kinematics::Pose3d yawPoseInWorld = pitchPoseInWorld.TransformBy(
+        turret_kinematics::Transform3d{
+            config_.yawOriginInPitchFrame,
+            turret_kinematics::Rotation3d{0.0, 0.0, yawRadians}});
     const turret_kinematics::Pose3d cameraPoseInWorld =
-        gimbalPoseInWorld.TransformBy(config_.cameraInGimbal);
+        yawPoseInWorld.TransformBy(config_.gimbalToCamera);
 
     const cv::Matx33d cameraMatrix{
         config_.fx, 0.0, config_.cx,
@@ -131,7 +136,7 @@ std::optional<turret_kinematics::Translation3d> PixelToWorld::projectPixelToWorl
     return worldPoint;
 }
 
-std::optional<cv::Point2d> PixelToWorld::worldToPixel(
+std::optional<cv::Point2d> CameraProjection::worldToPixel(
     const turret_kinematics::Translation3d& point,
     const GimbalAngles& angles) const
 {
@@ -142,10 +147,13 @@ std::optional<cv::Point2d> PixelToWorld::worldToPixel(
     const double pitch = config.pitchSign *
         (angles.pitch.value() + config.pitchOffset.value()) * CV_PI / 180.0;
 
-    const turret_kinematics::Pose3d gimbalPose{
+    const turret_kinematics::Pose3d pitchPose{
         config.gimbalOriginInWorld,
-        turret_kinematics::Rotation3d{0.0, pitch, yaw}};
-    const auto cameraPose = gimbalPose.TransformBy(config.cameraInGimbal);
+        turret_kinematics::Rotation3d{0.0, pitch, 0.0}};
+    const auto yawPose = pitchPose.TransformBy(turret_kinematics::Transform3d{
+        config.yawOriginInPitchFrame,
+        turret_kinematics::Rotation3d{0.0, 0.0, yaw}});
+    const auto cameraPose = yawPose.TransformBy(config.gimbalToCamera);
 
     const auto cameraPoint = (point - cameraPose.Translation())
         .RotateBy(-cameraPose.Rotation());

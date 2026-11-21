@@ -10,11 +10,13 @@
 #include "frc/estimator/KalmanFilter.h"
 
 using turret_kinematics::Pose3d;
+using turret_kinematics::Pose2d;
 using turret_kinematics::Rotation2d;
 using turret_kinematics::Rotation3d;
 using turret_kinematics::Translation2d;
 using turret_kinematics::Translation3d;
 using turret_kinematics::Transform3d;
+using turret_kinematics::Transform2d;
 
 int main() {
   using namespace units::literals;
@@ -32,6 +34,28 @@ int main() {
       Translation2d{2.0, 0.0}.RotateBy(Rotation2d{units::degree_t{90.0}});
   assert(std::abs(rotated2d.X().value()) < 1e-9);
   assert(std::abs(rotated2d.Y().value() - 2.0) < 1e-9);
+
+    const Translation3d center3d{2.0, 0.4, 0.2};
+    const Translation3d target3d{1.7, 0.1, 0.5};
+    const Pose2d frame2d{
+      {-center3d.Y().value(), center3d.Z().value()},
+      Rotation2d{units::degree_t{30.0}}};
+    const Pose2d targetInPlane{
+      {-target3d.Y().value(), target3d.Z().value()}, Rotation2d{}};
+  const Pose2d targetInLocal = targetInPlane.RelativeTo(frame2d);
+  const Pose2d targetRoundTrip =
+      frame2d.TransformBy({targetInLocal.Translation(), Rotation2d{}});
+  assert(targetRoundTrip.Translation() == targetInPlane.Translation());
+    const Translation3d target3dRoundTrip{
+      target3d.X(), -targetRoundTrip.X(), targetRoundTrip.Y()};
+    assert(target3dRoundTrip == target3d);
+
+  const Transform2d localStep{Translation2d{1.0, 0.0},
+                              Rotation2d{units::degree_t{90.0}}};
+  const Pose2d movedFrame = frame2d + localStep;
+  assert(std::abs(movedFrame.X().value() - (-0.4)) > 1e-3);
+  assert((movedFrame - frame2d) == localStep);
+  assert((localStep + localStep.Inverse()) == Transform2d{});
 
   const Translation3d inchPosition{12_in, 0_m, 0_m};
   assert(std::abs(inchPosition.X().value() - 0.3048) < 1e-9);
