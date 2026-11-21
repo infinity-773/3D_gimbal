@@ -14,10 +14,10 @@
 
 // 单目标连续出现多久后视为机械状态已重置。
 inline constexpr int kSINGLE_TARGET_RESET_FRAMES = 10;
-// 一次击发后暂停短时间，等待机关因命中而跳变。
+// 击发后该时间内出现新亮起的未激活目标则确认命中并切换；超时未跳变则允许补发。
 inline constexpr int kSWITCH_SHOT_WAIT_MS = 600;
-// 首发后在这个时间内跳变才确认原目标命中；更晚跳变仍会切换目标。
-inline constexpr int kSWITCH_HIT_WINDOW_MS = 3000;
+// 同一目标未命中时最多补发到这个发数，之后等目标变化，避免目标切换后弹仓打空。
+inline constexpr int kSWITCH_MAX_SHOTS_PER_TARGET = 2;
 
 // 通过观察“目标跳变”确认命中的五槽位匹配器。
 // 这里只负责选择目标和记录 active 状态，不计算角速度、提前量或火控。
@@ -87,42 +87,50 @@ public:
         {
             const int elapsedMs = now - pendingShot_->firedAt;
 
-            // 600ms 后开始判断目标是否因命中而跳变；跳变时间决定原目标是否确认命中。
-            if (elapsedMs >= kSWITCH_SHOT_WAIT_MS)
+            if (elapsedMs < kSWITCH_SHOT_WAIT_MS)
             {
                 const int refreshed = findRefreshedInactive(
                     *indices, pendingShot_->visibleAtFire);
-                if (refreshed >= 0)
-                {
-                    if (elapsedMs <= kSWITCH_HIT_WINDOW_MS)
-                        targets_[pendingShot_->targetIndex].active = true;
+                previousIndices_ = *indices;
+                if (refreshed < 0)
+                    return std::nullopt;
 
-                    pendingShot_.reset();
-                    if (allActive())
-                        resetRoundState();
-                    selectedIndex_ = refreshed;
-                    previousIndices_ = *indices;
-                    return positionForIndex(*indices, positions, refreshed);
-                }
+                targets_[pendingShot_->targetIndex].active = true;
+                pendingShot_.reset();
+                shotTarget_.reset();
+                shotCount_ = 0;
+                if (allActive())
+                    resetRoundState();
+                selectedIndex_ = refreshed;
+                previousIndices_ = *indices;
+                return positionForIndex(*indices, positions, refreshed);
             }
 
-            // 600ms 前等待；600ms 后一直瞄准并重复击发原目标，直到真正发生跳变。
-            previousIndices_ = *indices;
-            if (elapsedMs < kSWITCH_SHOT_WAIT_MS)
-                return std::nullopt;
-            return positionForIndex(*indices, positions,
-                                    static_cast<int>(pendingShot_->targetIndex));
+            // 未跳变视为未命中：不操作，原目标可继续被选中补发。
+            pendingShot_.reset();
+        }
+
+        // 已击发目标熄灭后重新亮起，视为新目标，重新计数。
+        if (shotTarget_ && !containsIndex(*indices, static_cast<int>(*shotTarget_)))
+        {
+            shotTarget_.reset();
+            shotCount_ = 0;
         }
 
         const int selected = chooseInactiveTarget(*indices);
         previousIndices_ = *indices;
         if (selected < 0)
             return std::nullopt;
+        if (shotTarget_ && *shotTarget_ == static_cast<std::size_t>(selected) &&
+            shotCount_ >= kSWITCH_MAX_SHOTS_PER_TARGET)
+        {
+            return std::nullopt;
+        }
         selectedIndex_ = static_cast<std::size_t>(selected);
         return positionForIndex(*indices, positions, selected);
     }
 
-    // 火控实际击发后调用；首发记录会启动“等待跳变”判定窗口。
+    // 火控实际击发后调用，开启 0.6s 的“等待跳变”窗口。
     void markFired(int now)
     {
         if (!recordHitTargets_ || !selectedIndex_ ||
@@ -132,11 +140,15 @@ public:
         }
 
         lastFiredIndex_ = selectedIndex_;
-
-        // 600ms 后允许补发，但不能重置第一次开火的 3s 判定窗口。
-        if (pendingShot_ && pendingShot_->targetIndex == *selectedIndex_)
-            return;
-
+        if (shotTarget_ == selectedIndex_)
+        {
+            ++shotCount_;
+        }
+        else
+        {
+            shotTarget_ = selectedIndex_;
+            shotCount_ = 1;
+        }
         pendingShot_ = PendingShot{
             .targetIndex = *selectedIndex_,
             .firedAt = now,
@@ -207,6 +219,8 @@ private:
             target.active = false;
         selectedIndex_.reset();
         pendingShot_.reset();
+        shotTarget_.reset();
+        shotCount_ = 0;
         previousIndices_ = {-1, -1};
     }
 
@@ -228,6 +242,18 @@ private:
 
     int chooseInactiveTarget(const std::array<int, 2>& indices) const
     {
+        // 两个都未激活时记录可能丢了，刚击发过的那个更可能是已命中的。
+        if (shotTarget_)
+        {
+            for (int index : indices)
+            {
+                if (index >= 0 && !targets_[index].active &&
+                    static_cast<std::size_t>(index) != *shotTarget_)
+                {
+                    return index;
+                }
+            }
+        }
         for (int index : indices)
         {
             if (index >= 0 && !targets_[index].active &&
@@ -386,6 +412,8 @@ private:
     std::optional<std::size_t> selectedIndex_;
     std::optional<std::size_t> lastFiredIndex_;
     std::optional<PendingShot> pendingShot_;
+    std::optional<std::size_t> shotTarget_;
+    int shotCount_ = 0;
     std::array<int, 2> previousIndices_{-1, -1};
 };
 

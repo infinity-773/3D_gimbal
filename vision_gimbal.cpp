@@ -29,6 +29,7 @@
 #include "FireControl.h"
 #include "TargetMatcher.h"
 #include <AimSolver.h>
+#include <TargetMatcherSwitch.h>
 /*---------添加区域结束----------*/
 
 
@@ -194,7 +195,7 @@ static frc::Translation3d center = kCENTER_IN_BASE;
 static double omega = kTARGET_OMEGAS[1];
 static bool g_omegaSwitchLockoutActive = false;
 static std::chrono::steady_clock::time_point g_omegaSwitchedAt;
-static TargetMatcher targetMatcher;
+static TargetMatcherSwitch targetMatcher;
 static OmegaEstimator omegaEstimator;
 
 
