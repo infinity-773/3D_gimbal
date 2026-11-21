@@ -59,6 +59,8 @@ public:
         int now = 0,
         double omega = 0.0)
     {
+        canFire_ = false;
+
         // 五个槽位先随角速度旋转，再用当前观测角度修正预测位置。
         advanceRotations(now, omega);
 
@@ -93,7 +95,11 @@ public:
                     *indices, pendingShot_->visibleAtFire);
                 previousIndices_ = *indices;
                 if (refreshed < 0)
-                    return std::nullopt;
+                {
+                    // 没有下一个目标时继续跟随已击发目标，避免云台过早移动带偏弹道。
+                    return positionForIndex(*indices, positions,
+                                            static_cast<int>(pendingShot_->targetIndex));
+                }
 
                 targets_[pendingShot_->targetIndex].active = true;
                 pendingShot_.reset();
@@ -103,6 +109,7 @@ public:
                     resetRoundState();
                 selectedIndex_ = refreshed;
                 previousIndices_ = *indices;
+                canFire_ = true;
                 return positionForIndex(*indices, positions, refreshed);
             }
 
@@ -121,13 +128,18 @@ public:
         previousIndices_ = *indices;
         if (selected < 0)
             return std::nullopt;
-        if (shotTarget_ && *shotTarget_ == static_cast<std::size_t>(selected) &&
-            shotCount_ >= kSWITCH_MAX_SHOTS_PER_TARGET)
-        {
-            return std::nullopt;
-        }
+        const bool exhausted =
+            shotTarget_ && *shotTarget_ == static_cast<std::size_t>(selected) &&
+            shotCount_ >= kSWITCH_MAX_SHOTS_PER_TARGET;
         selectedIndex_ = static_cast<std::size_t>(selected);
+        canFire_ = !exhausted;
         return positionForIndex(*indices, positions, selected);
+    }
+
+    // 本帧返回的目标是否允许击发；等待跳变窗口内和补发打满后为 false，但仍会继续跟随目标。
+    bool canFire() const
+    {
+        return canFire_;
     }
 
     // 火控实际击发后调用，开启 0.6s 的“等待跳变”窗口。
@@ -414,6 +426,7 @@ private:
     std::optional<PendingShot> pendingShot_;
     std::optional<std::size_t> shotTarget_;
     int shotCount_ = 0;
+    bool canFire_ = false;
     std::array<int, 2> previousIndices_{-1, -1};
 };
 
