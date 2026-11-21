@@ -13,9 +13,9 @@
 #include <vector>
 
 // 单目标连续出现多久后视为机械状态已重置。
-inline constexpr int kSINGLE_TARGET_RESET_FRAMES = 10;
+inline constexpr int kSINGLE_TARGET_RESET_FRAMES = 50;
 // 击发后该时间内出现新亮起的未激活目标则确认命中并切换；超时未跳变则允许补发。
-inline constexpr int kSWITCH_SHOT_WAIT_MS = 600;
+inline constexpr int kSWITCH_SHOT_WAIT_MS = 1200;
 // 同一目标未命中时最多补发到这个发数，之后等目标变化，避免目标切换后弹仓打空。
 inline constexpr int kSWITCH_MAX_SHOTS_PER_TARGET = 2;
 
@@ -66,7 +66,8 @@ public:
 
         // 只有连续看到单目标达到要求帧数，才把它视为新一轮的开始。
         const bool singleStable = singleTargetDebouncer_.update(positions.size() == 1);
-        if (!singleStable_ && singleStable)
+        // 刚击发的记录不能被“新一轮”重置冲掉，否则第一发会丢。
+        if (!singleStable_ && singleStable && !pendingShot_ && !shotTarget_)
             resetRoundState();
         singleStable_ = singleStable;
 
