@@ -13,11 +13,11 @@
 #include <vector>
 
 // 单目标连续出现多久后视为机械状态已重置。
-inline constexpr int kSINGLE_TARGET_RESET_FRAMES = 50;
+inline constexpr int kSINGLE_TARGET_RESET_FRAMES = 30;
 // 击发后该时间内出现新亮起的未激活目标则确认命中并切换；超时未跳变则允许补发。
-inline constexpr int kSWITCH_SHOT_WAIT_MS = 800;
+inline constexpr int kSWITCH_SHOT_WAIT_MS = 650;
 // 同一目标未命中时最多补发到这个发数，之后等目标变化，避免目标切换后弹仓打空。
-inline constexpr int kSWITCH_MAX_SHOTS_PER_TARGET = 2;
+inline constexpr int kSWITCH_MAX_SHOTS_PER_TARGET = 1;
 
 // 通过观察“目标跳变”确认命中的五槽位匹配器。
 // 这里只负责选择目标和记录 active 状态，不计算角速度、提前量或火控。

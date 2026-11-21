@@ -566,7 +566,7 @@ int main()
         }
   
         AxisData angles = getShootAngles(expTarget);
-        AxisData AnglesWithLead = withLead(angles, 1.2, -2.2);
+        AxisData AnglesWithLead = withLead(angles, 1.5, -2.5);
 
 
 

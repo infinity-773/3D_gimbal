@@ -58,9 +58,9 @@ static const double kFocalPx = 1300;
 
 //************************************火控参数*************************************** */
 static const double kAIM_TOLERANCE = 2.0;
-static const double kAIM_STABLE_FRAMES = 30;
-static const int kPushRetractMs = 200; // 推杆回缩脉冲时长
-static const double kCommandSlewRateDegPerSec = 17; // 绝对角度指令最大变化速度
+static const double kAIM_STABLE_FRAMES = 30;// dont change this
+static const int kPushRetractMs = 100; // 推杆回缩脉冲时长
+static const double kCommandSlewRateDegPerSec = 15; // 绝对角度指令最大变化速度
 
 //************************************拟合参数****************************************** */
 static const int kPOINTS_NUM = 60;
@@ -75,7 +75,7 @@ static const int kTARGET_HIT_CONFIRM_FRAMES = 20; // 发射后延迟确认当前
 static const double kOMEGA_SWITCH_LOCKOUT_MS = 100; // 角速度切换锁定时间，单位毫秒
 static const double kACTIVE_CONFIRM_MS = 200;
 static const int kOMEGA_PERIOD_MS = 6000; // 角速度切换周期
-static const int kOMEGA_FIRE_BLOCK_MS = 500; // 切换前禁用开火的时长
+static const int kOMEGA_FIRE_BLOCK_MS = 700; // 切换前禁用开火的时长
 static constexpr std::array<double, 3> kTARGET_OMEGAS{
     std::numbers::pi / 3.0,
     std::numbers::pi / 2.0,
