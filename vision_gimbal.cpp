@@ -567,12 +567,12 @@ int main()
         }
   
         AxisData angles = getShootAngles(expTarget);
-        AxisData AnglesWithLead = withLead(angles, 1.5, -2.5);
+        AxisData AnglesWithLead = withLead(angles, -2.5, -3.7);
 
         frc::Translation3d trueTarget = AimSolver::getPhaseAtTime(
             0.15, expTarget, center, omega, false);
 
-        AxisData trueAngle = withLead(getShootAngles(trueTarget), 1.5, -2.5);
+        AxisData trueAngle = withLead(getShootAngles(trueTarget), -2.5, -3.7);
 
 
 
