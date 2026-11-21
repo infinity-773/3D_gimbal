@@ -247,7 +247,7 @@ public:
             return false;
         }
         measuredOmega_ = std::abs(fittedOmega);
-        matchedOmega_ = matchOmega(measuredOmega_);
+        matchedOmega_ = matchOmega(measuredOmega_, now);
         ready_ = true;
         return true;
     }
@@ -259,7 +259,20 @@ public:
         measuredOmega_ = 0.0;
         pendingOmega_ = matchedOmega_;
         pendingFrames_ = 0;
+        locked_ = false;
         ready_ = false;
+    }
+
+    // 累计检测到的角速度切换次数（首次锁定不算切换）。
+    int switchCount() const
+    {
+        return switchCount_;
+    }
+
+    // 最近一次切换的起点：新角速度候选首次出现的时刻，已扣除去抖帧数。
+    int lastSwitchOriginMs() const
+    {
+        return switchOriginMs_;
     }
 
     double getOmega() const
@@ -278,7 +291,7 @@ public:
     }
 
 private:
-    double matchOmega(double measuredOmega)
+    double matchOmega(double measuredOmega, int now)
     {
         const double candidate = *std::min_element(
             kTARGET_OMEGAS.begin(), kTARGET_OMEGAS.end(),
@@ -288,6 +301,14 @@ private:
             });
         constexpr double kSwitchMargin = 0.20;
         constexpr int kSwitchStableFrames = 5;
+        // 初始值只是默认假设，首次拟合直接采用，不计为一次切换。
+        if (!locked_)
+        {
+            locked_ = true;
+            pendingOmega_ = candidate;
+            pendingFrames_ = 0;
+            return candidate;
+        }
         const double improvement =
             std::abs(matchedOmega_ - measuredOmega) -
             std::abs(candidate - measuredOmega);
@@ -304,8 +325,15 @@ private:
         {
             pendingOmega_ = candidate;
             pendingFrames_ = 1;
+            pendingStartMs_ = now;
         }
-        return pendingFrames_ >= kSwitchStableFrames ? candidate : matchedOmega_;
+        if (pendingFrames_ >= kSwitchStableFrames)
+        {
+            ++switchCount_;
+            switchOriginMs_ = pendingStartMs_;
+            return candidate;
+        }
+        return matchedOmega_;
     }
 
     std::deque<OmegaSample> samples_;
@@ -314,6 +342,10 @@ private:
     double matchedOmega_ = kTARGET_OMEGAS[1];
     double pendingOmega_ = kTARGET_OMEGAS[1];
     int pendingFrames_ = 0;
+    int pendingStartMs_ = 0;
+    int switchOriginMs_ = 0;
+    int switchCount_ = 0;
+    bool locked_ = false;
     bool ready_ = false;
 };
 

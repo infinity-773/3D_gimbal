@@ -197,6 +197,8 @@ static bool g_omegaSwitchLockoutActive = false;
 static std::chrono::steady_clock::time_point g_omegaSwitchedAt;
 static TargetMatcherSwitch targetMatcher;
 static OmegaEstimator omegaEstimator;
+static int g_omegaCycleStartMs = -1; // 首次扫到目标或最近一次角速度切换的起点
+static int g_omegaSwitchSeen = 0;
 
 
 
@@ -529,6 +531,18 @@ int main()
             omega = omegaEstimator.getOmega();
         }
 
+        if (g_omegaCycleStartMs < 0 && targetProjectionValid)
+            g_omegaCycleStartMs = controllerNow;
+        if (omegaEstimator.switchCount() != g_omegaSwitchSeen)
+        {
+            g_omegaSwitchSeen = omegaEstimator.switchCount();
+            g_omegaCycleStartMs = std::min(controllerNow, omegaEstimator.lastSwitchOriginMs());
+        }
+        // 每个周期末尾的禁火窗口；取模使角速度未变化时也能循环。
+        const bool omegaFireBlocked = g_omegaCycleStartMs >= 0 &&
+            (controllerNow - g_omegaCycleStartMs) % kOMEGA_PERIOD_MS >=
+                kOMEGA_PERIOD_MS - kOMEGA_FIRE_BLOCK_MS;
+
         frc::Translation3d expTarget = center;
         if (currentTarget)
         {
@@ -584,7 +598,7 @@ int main()
 
         const int shotsBeforeFire = g_shotsFired;
         sendData.Push_flag = updateFireControl(
-            aimTargetValid,
+            aimTargetValid && !omegaFireBlocked,
             feedbackValid,
             AnglesWithLead,
             feedback,
@@ -628,6 +642,7 @@ int main()
             .targetColor = kTargetColor,
             .receivedAt = frameReceivedAt};
         dashboard.updateLog(dashboardFrame);
+        dashboard.setLogField("omega fire block", omegaFireBlocked ? "yes" : "no");
         dashboard.draw(image, dashboardFrame, projection);
         dashboard.show(image, mask);
         if (!dashboard.processKeys(image, mask, kEnableFire, kTargetColor))

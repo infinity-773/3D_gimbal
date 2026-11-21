@@ -74,6 +74,8 @@ static const units::degree_t kTARGET_MATCH_TOLERANCE = units::degree_t{15.0}; //
 static const int kTARGET_HIT_CONFIRM_FRAMES = 20; // 发射后延迟确认当前目标已命中
 static const double kOMEGA_SWITCH_LOCKOUT_MS = 100; // 角速度切换锁定时间，单位毫秒
 static const double kACTIVE_CONFIRM_MS = 200;
+static const int kOMEGA_PERIOD_MS = 6000; // 角速度切换周期
+static const int kOMEGA_FIRE_BLOCK_MS = 500; // 切换前禁用开火的时长
 static constexpr std::array<double, 3> kTARGET_OMEGAS{
     std::numbers::pi / 3.0,
     std::numbers::pi / 2.0,
