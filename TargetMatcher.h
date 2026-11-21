@@ -84,15 +84,23 @@ public:
             }
             indices[i] = *matchResult;
         }
+
         if(indices[0] == last_fired_id)
-        {   if(targets_[indices[0]].active == false){ return positions[0]; }
-                targets_[last_fired_id].setState(true);
+        {
+            if(targets_[indices[0]].active == false){
+                lastIndices = indices;
+                return positions[0];
+            }
+            targets_[last_fired_id].setState(true);
                 last_fired_id = indices[1];
                 lastIndices = indices;
                 return positions[1];
         }else if(indices[1] == last_fired_id)
         {
-            if(targets_[indices[1]].active == false){ return positions[1]; }
+            if(targets_[indices[1]].active == false){
+                lastIndices = indices;
+                return positions[1];
+            }
             targets_[last_fired_id].setState(true);
             last_fired_id = indices[0];
             lastIndices = indices;
@@ -100,13 +108,13 @@ public:
         }else if(targets_[indices[0]].active == false && targets_[indices[1]].active == true)
         {
             lastIndices = indices;
-            last_fired_id = indices[1];
-            return positions[1];
+            last_fired_id = indices[0];
+            return positions[0];
         }else if(targets_[indices[0]].active == true && targets_[indices[1]].active == false)
         {
             lastIndices = indices;
-            last_fired_id = indices[0];
-            return positions[0];
+            last_fired_id = indices[1];
+            return positions[1];
         }else
 
         if(targets_[indices[0]].active == targets_[indices[1]].active){
@@ -121,16 +129,16 @@ public:
             }
             //id0先变化
             if(lastIndices[0] != indices[0] && lastIndices[1] == indices[1]){
-                targets_[lastIndices[0]].active = (true);
-                targets_[indices[1]].active = (false);
-                //last_fired_id = indices[0];
+                targets_[lastIndices[0]].active = true;
+                targets_[indices[0]].active = false;
+                last_fired_id = indices[0];
                 lastIndices = indices;
                 return positions[0];
             //id1先变化
             }else if(lastIndices[0] == indices[0] && lastIndices[1] != indices[1]){
-                targets_[indices[0]].active = (false);
-                targets_[lastIndices[1]].active = (true);
-                //last_fired_id = indices[1];
+                targets_[lastIndices[1]].active = true;
+                targets_[indices[1]].active = false;
+                last_fired_id = indices[1];
                 lastIndices = indices;
                 return positions[1];
             }
