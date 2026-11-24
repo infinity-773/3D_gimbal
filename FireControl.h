@@ -14,7 +14,7 @@
 #include "Constants.h"
 
 // 控制台
-static bool kEnableFire = false;  // 开火总开关 调参时一定关着
+static bool kEnableFire = false;  // 开火总开关
 
 // 跨帧要记住的
  static Debouncer aimedDebouncer(kAIM_STABLE_FRAMES, DebounceEdge::Rising);

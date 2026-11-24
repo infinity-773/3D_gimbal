@@ -550,7 +550,7 @@ int main()
             if (useOmega)
             {
                 const auto correctedTarget = AimSolver::buildPointByR(
-                    *currentTarget, center, kTRAJECTORY_RADIUS);
+                    targetMatcher.smoothed(*currentTarget), center, kTRAJECTORY_RADIUS);
                 expTarget = AimSolver::getPhaseAtTime(
                     0.4, correctedTarget, center, omega, true);
             }
@@ -604,7 +604,7 @@ int main()
 
         const int shotsBeforeFire = g_shotsFired;
         sendData.Push_flag = updateFireControl(
-            aimTargetValid && !omegaFireBlocked,
+            aimTargetValid && !omegaFireBlocked && targetMatcher.canFire(),
             feedbackValid,
             trueAngle, //使用舵机实际能赶到的点
             feedback,

@@ -8,13 +8,21 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <limits>
+#include <numbers>
 #include <optional>
 #include <vector>
 
+// 视觉相位量测噪声标准差，单位度；调参时越大越平滑但越滞后。
+inline constexpr double kPHASE_MEASURE_STD_DEG = 1.5;
+// 相位过程噪声强度，rad^2/s。
+inline constexpr double kPHASE_PROCESS_NOISE = 4e-4;
+// 角速度修正量的随机游走强度，(rad/s)^2/s；角速度切换时靠它快速跟上。
+inline constexpr double kRATE_PROCESS_NOISE = 0.5;
 // 单目标连续出现多久后视为机械状态已重置。
 inline constexpr int kSINGLE_TARGET_RESET_FRAMES = 30;
-// 击发后该时间内出现新亮起的未激活目标则确认命中并切换；超时未跳变则允许补发。
+// 击发后该时间内，原目标仍亮且又亮起新的未激活目标才确认命中；原目标熄灭而新目标亮起是超时切换。
 inline constexpr int kSWITCH_SHOT_WAIT_MS = 650;
 // 同一目标未命中时最多补发到这个发数，之后等目标变化，避免目标切换后弹仓打空。
 inline constexpr int kSWITCH_MAX_SHOTS_PER_TARGET = 1;
@@ -40,11 +48,8 @@ public:
         }
 
         initialized_ = true;
-        for (std::size_t i = 0; i < targets_.size(); ++i)
-        {
-            targets_[i].rotation = frc::Rotation2d{
-                rotation->Degrees() + units::degree_t{static_cast<double>(i) * 72.0}};
-        }
+        phaseFilter_.init(rotation->Radians().value());
+        applyPhaseToSlots();
     }
 
     // 圆心拟合持续变化时同步更新画面和角度匹配使用的圆心。
@@ -72,9 +77,11 @@ public:
         singleStable_ = singleStable;
 
         // 原能量机关规则最多同时有效观察两个目标；异常数量不参与选择。
+        // 等待跳变期间丢帧要保留上一帧可见的靶，恢复后才能按靶号变化判命中。
         if (positions.empty() || positions.size() > 2)
         {
-            previousIndices_ = {-1, -1};
+            if (!pendingShot_)
+                previousIndices_ = {-1, -1};
             return std::nullopt;
         }
         syncAngles(positions);
@@ -82,7 +89,8 @@ public:
         const auto indices = matchPositions(positions);
         if (!indices)
         {
-            previousIndices_ = {-1, -1};
+            if (!pendingShot_)
+                previousIndices_ = {-1, -1};
             return std::nullopt;
         }
 
@@ -102,7 +110,9 @@ public:
                                             static_cast<int>(pendingShot_->targetIndex));
                 }
 
-                targets_[pendingShot_->targetIndex].active = true;
+                // 命中后原目标会作为已激活靶继续亮；它已熄灭则是超时切换，未命中。
+                if (containsIndex(*indices, static_cast<int>(pendingShot_->targetIndex)))
+                    targets_[pendingShot_->targetIndex].active = true;
                 pendingShot_.reset();
                 shotTarget_.reset();
                 shotCount_ = 0;
@@ -207,12 +217,82 @@ public:
         return result;
     }
 
+    // 把观测到的目标换成滤波后相位对应的点；角速度估计仍应使用原始观测，避免反馈。
+    frc::Translation3d smoothed(const frc::Translation3d& observed) const
+    {
+        if (!initialized_)
+            return observed;
+        const auto index = match(observed);
+        if (!index)
+            return observed;
+
+        const auto& rotation = targets_[*index].rotation;
+        const frc::Translation2d offset{
+            units::meter_t{kTRAJECTORY_RADIUS * rotation.Cos()},
+            units::meter_t{kTRAJECTORY_RADIUS * rotation.Sin()}};
+        const auto point = ToXYZ(offset, center_);
+        return frc::Translation3d{observed.X(), point.Y(), point.Z()};
+    }
+
     bool initialized() const
     {
         return initialized_;
     }
 
 private:
+    // 五个槽位公共相位（槽位 0）的两状态卡尔曼滤波：[相位, 相对输入角速度的修正]。
+    struct PhaseFilter
+    {
+        double phase = 0.0;
+        double rateError = 0.0;
+        double p00 = 1.0;
+        double p01 = 0.0;
+        double p11 = 1.0;
+
+        static double wrap(double angle)
+        {
+            return std::remainder(angle, 2.0 * std::numbers::pi);
+        }
+
+        void init(double initialPhase)
+        {
+            const double sigma = kPHASE_MEASURE_STD_DEG * std::numbers::pi / 180.0;
+            phase = wrap(initialPhase);
+            rateError = 0.0;
+            p00 = sigma * sigma;
+            p01 = 0.0;
+            p11 = 0.3 * 0.3;
+        }
+
+        void predict(double dt, double inputDelta)
+        {
+            phase = wrap(phase + inputDelta + rateError * dt);
+            const double n00 = p00 + 2.0 * dt * p01 + dt * dt * p11 +
+                kRATE_PROCESS_NOISE * dt * dt * dt / 3.0 + kPHASE_PROCESS_NOISE * dt;
+            const double n01 = p01 + dt * p11 + kRATE_PROCESS_NOISE * dt * dt / 2.0;
+            const double n11 = p11 + kRATE_PROCESS_NOISE * dt;
+            p00 = n00;
+            p01 = n01;
+            p11 = n11;
+        }
+
+        void correct(double measuredPhase)
+        {
+            const double sigma = kPHASE_MEASURE_STD_DEG * std::numbers::pi / 180.0;
+            const double innovation = wrap(measuredPhase - phase);
+            const double s = p00 + sigma * sigma;
+            const double k0 = p00 / s;
+            const double k1 = p01 / s;
+            phase = wrap(phase + k0 * innovation);
+            rateError += k1 * innovation;
+            const double n00 = (1.0 - k0) * p00;
+            const double n01 = (1.0 - k0) * p01;
+            const double n11 = p11 - k1 * p01;
+            p00 = n00;
+            p01 = n01;
+            p11 = n11;
+        }
+    };
     struct Target
     {
         frc::Rotation2d rotation;
@@ -342,11 +422,20 @@ private:
             return;
         }
 
-        const units::radian_t delta{
-            (anti_ ? 1 : -1) * omega * (now - lastUpdateAt_) / 1000.0};
-        for (auto& target : targets_)
-            target.rotation = target.rotation.RotateBy(frc::Rotation2d{delta});
+        const double dt = (now - lastUpdateAt_) / 1000.0;
+        phaseFilter_.predict(dt, (anti_ ? 1 : -1) * omega * dt);
+        applyPhaseToSlots();
         lastUpdateAt_ = now;
+    }
+
+    void applyPhaseToSlots()
+    {
+        constexpr double kSlotAngle = 2.0 * std::numbers::pi / 5.0;
+        for (std::size_t i = 0; i < targets_.size(); ++i)
+        {
+            targets_[i].rotation = frc::Rotation2d{units::radian_t{
+                phaseFilter_.phase + static_cast<double>(i) * kSlotAngle}};
+        }
     }
 
     bool syncAngles(const std::vector<frc::Translation3d>& positions)
@@ -380,14 +469,10 @@ private:
         if (!rotation)
             return false;
 
-        for (std::size_t i = 0; i < targets_.size(); ++i)
-        {
-            const double slotOffset =
-                static_cast<double>(static_cast<int>(i) -
-                                    static_cast<int>(*anchorIndex)) * 72.0;
-            targets_[i].rotation = frc::Rotation2d{
-                rotation->Degrees() + units::degree_t{slotOffset}};
-        }
+        constexpr double kSlotAngle = 2.0 * std::numbers::pi / 5.0;
+        phaseFilter_.correct(rotation->Radians().value() -
+                             static_cast<double>(*anchorIndex) * kSlotAngle);
+        applyPhaseToSlots();
         return true;
     }
 
@@ -414,6 +499,7 @@ private:
     }
 
     std::array<Target, 5> targets_;
+    PhaseFilter phaseFilter_;
     frc::Translation3d center_;
     int lastUpdateAt_ = 0;
     bool initialized_ = false;
