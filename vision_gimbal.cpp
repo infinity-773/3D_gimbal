@@ -100,7 +100,7 @@ int cameraAutoExposure = 1;
 // 单位：100 us，即 19 = 1.9 ms，166 = 16.6 ms。
 // 实际时间范围：0.1～1000 ms。
 // 作用：增大通常更亮，但运动拖影更明显，过长还可能降低实际帧率。
-int cameraExposure = 8;
+int cameraExposure = 11;
 
 // 亮度
 // 范围：-64～64，步长 1，默认 0。
@@ -110,7 +110,7 @@ int cameraBrightness = 10;
 // 对比度
 // 范围：0～100，步长 1，默认 35。
 // 作用：调整明暗区域的差别。
-int cameraContrast = 45;
+int cameraContrast = 55;
 
 // 伽马
 // 范围：100～500，步长 1，默认 300。
@@ -186,6 +186,8 @@ static double g_commandPitch = 0.0;
 static bool hasYellow = true;
 bool useOmega = true; // 是否使用模型预测
 bool ifRecordHit = true; // 是否记录已击打目标；关闭后所有目标始终视为未激活
+bool useKalman = false; // 靶号相位是否使用卡尔曼滤波；关闭后退回开环累加+每帧直接用观测角覆盖
+bool isAnti = true; // 是否为逆时针
 
 
 
@@ -462,20 +464,20 @@ int main()
                 return pts;
             }();
 
-        static bool previousHasYellow = false;
-        hasYellow = hasYellowRing(image, yellowMask);
-        const bool yellowAppeared = hasYellow && !previousHasYellow;
-        previousHasYellow = hasYellow;
-        if (yellowAppeared)
-        {
-            g_modelAccepted = false;
-            estimator.resetCenter();
-            modelLockDebouncer.reset(false);
-            targetMatcher.reset();
-            omegaEstimator.reset();
-            omega = kTARGET_OMEGAS[1];
-            std::cout << "检测到黄色目标,已清空拟合历史。\n";
-        }
+        //static bool previousHasYellow = false;
+        hasYellow = false;
+        //const bool yellowAppeared = hasYellow && !previousHasYellow;
+        //previousHasYellow = hasYellow;
+        // if (yellowAppeared)
+        //{
+        //    g_modelAccepted = false;
+         //   estimator.resetCenter();
+           // modelLockDebouncer.reset(false);
+            //targetMatcher.reset();
+           // omegaEstimator.reset();
+           // /omega = kTARGET_OMEGAS[1];
+        //    std::cout << "检测到黄色目标,已清空拟合历史。\n";
+        //}
 
         const int controllerNow = static_cast<int>(
             std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -507,7 +509,7 @@ int main()
                 modelLockDebouncer.update(modelFitReady))
             {
                 center = estimator.getExpCenter();
-                targetMatcher.initialize(center, targetsInBase[0], controllerNow);
+                targetMatcher.initialize(center, targetsInBase[0], isAnti,controllerNow);
                 omegaEstimator.reset();
                 omega = kTARGET_OMEGAS[1];
                 g_modelAccepted = true;
@@ -521,13 +523,15 @@ int main()
         }
         
         targetMatcher.setRecordHitTargets(ifRecordHit);
+        targetMatcher.setUseKalman(useKalman);
         std::optional<frc::Translation3d> currentTarget;
         if (g_modelAccepted && !hasYellow)
         {
             currentTarget = targetMatcher.selectAndUpdate(targetsInBase, controllerNow, omega);
         }
         if (g_modelAccepted && currentTarget &&
-            omegaEstimator.updateOmega(controllerNow, *currentTarget, center))
+            omegaEstimator.updateOmega(controllerNow, *currentTarget, center,
+                                   targetMatcher.slotOf(*currentTarget)))
         {
             omega = omegaEstimator.getOmega();
         }
@@ -540,9 +544,10 @@ int main()
             g_omegaCycleStartMs = std::min(controllerNow, omegaEstimator.lastSwitchOriginMs());
         }
         // 每个周期末尾的禁火窗口；取模使角速度未变化时也能循环。
+        const int omegaCycleElapsedMs = g_omegaCycleStartMs >= 0
+            ? (controllerNow - g_omegaCycleStartMs) % kOMEGA_PERIOD_MS : 0;
         const bool omegaFireBlocked = g_omegaCycleStartMs >= 0 &&
-            (controllerNow - g_omegaCycleStartMs) % kOMEGA_PERIOD_MS >=
-                kOMEGA_PERIOD_MS - kOMEGA_FIRE_BLOCK_MS;
+            omegaCycleElapsedMs >= kOMEGA_PERIOD_MS - kOMEGA_FIRE_BLOCK_MS;
 
         frc::Translation3d expTarget = center;
         if (currentTarget)
@@ -552,7 +557,7 @@ int main()
                 const auto correctedTarget = AimSolver::buildPointByR(
                     targetMatcher.smoothed(*currentTarget), center, kTRAJECTORY_RADIUS);
                 expTarget = AimSolver::getPhaseAtTime(
-                    0.4, correctedTarget, center, omega, true);
+                    0.4, correctedTarget, center, omega, isAnti);
             }
             else
             {   if(targetsInBase.empty())
@@ -570,7 +575,7 @@ int main()
         AxisData AnglesWithLead = withLead(angles, -2.5, -3.7);
 
         frc::Translation3d trueTarget = AimSolver::getPhaseAtTime(
-            0.15, expTarget, center, omega, false);
+            0.15, expTarget, center, omega, !isAnti);
 
         AxisData trueAngle = withLead(getShootAngles(trueTarget), -2.5, -3.7);
 
@@ -583,6 +588,8 @@ int main()
         const double desiredYaw = aimTargetValid ? AnglesWithLead.yaw : 0.0;
         const double desiredPitch = aimTargetValid ? AnglesWithLead.pitch : 0.0;
 
+        double slewRateYaw = 0.0;
+        double slewRatePitch = 0.0;
         if (feedbackValid)
         {
             if (!g_commandInitialized)
@@ -592,11 +599,17 @@ int main()
                 g_commandInitialized = true;
             }
 
-            const double maxCommandStep = kCommandSlewRateDegPerSec * controlDt;
-            g_commandYaw += clampValue(
-                desiredYaw - g_commandYaw, -maxCommandStep, maxCommandStep);
-            g_commandPitch += clampValue(
-                desiredPitch - g_commandPitch, -maxCommandStep, maxCommandStep);
+            const auto stepToward = [controlDt](double current, double desired, double& rateOut)
+            {
+                const double error = desired - current;
+                rateOut = clampValue(
+                    kCommandSlewKp * std::abs(error),
+                    kCommandSlewMinDegPerSec, kCommandSlewMaxDegPerSec);
+                const double maxStep = std::min(rateOut * controlDt, std::abs(error));
+                return clampValue(error, -maxStep, maxStep);
+            };
+            g_commandYaw += stepToward(g_commandYaw, desiredYaw, slewRateYaw);
+            g_commandPitch += stepToward(g_commandPitch, desiredPitch, slewRatePitch);
 
             sendData.yaw_angle = static_cast<float>(g_commandYaw);
             sendData.pitch_angle = static_cast<float>(g_commandPitch);
@@ -650,8 +663,27 @@ int main()
             .receivedAt = frameReceivedAt};
         dashboard.updateLog(dashboardFrame);
         dashboard.setLogField("omega fire block", omegaFireBlocked ? "yes" : "no");
+        dashboard.setLogField("omega switch countdown", g_omegaCycleStartMs >= 0
+            ? cv::format("%.2f s (block in %.2f s)",
+                (kOMEGA_PERIOD_MS - omegaCycleElapsedMs) / 1000.0,
+                std::max(0, kOMEGA_PERIOD_MS - kOMEGA_FIRE_BLOCK_MS - omegaCycleElapsedMs) / 1000.0)
+            : "waiting for target");
+        dashboard.setLogField("kalman", useKalman ? "ON" : "OFF");
+        dashboard.setLogField("slew limit yaw / pitch", feedbackValid
+            ? cv::format("%.1f / %.1f deg/s", slewRateYaw, slewRatePitch)
+            : "n/a");
+        if (g_modelAccepted)
+        {
+            const auto kf = targetMatcher.filterDebug();
+            dashboard.setLogField("kf phase meas/filt (deg)",
+                cv::format("%.2f / %.2f", kf.measuredPhaseDeg, kf.filteredPhaseDeg));
+            dashboard.setLogField("kf innovation (deg)", cv::format("%.3f", kf.innovationDeg));
+            dashboard.setLogField("kf gain / phase std", cv::format("%.3f / %.3f deg",
+                kf.gain, kf.phaseStdDeg));
+            dashboard.setLogField("kf rate correction", cv::format("%.4f rad/s", kf.rateError));
+        }
         dashboard.draw(image, dashboardFrame, projection);
-        dashboard.show(image, mask, yellowMask);
+        dashboard.show(image, mask);
         if (!dashboard.processKeys(image, mask, kEnableFire, kTargetColor))
             break;
             

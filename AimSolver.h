@@ -8,7 +8,15 @@
 namespace AimSolver {
     frc::Translation3d getPhaseAtTime(double dt , frc::Translation3d const& currTarget , frc::Translation3d const& center,double omega,bool Anti){
         const double dy = currTarget.Y().value() - center.Y().value();
-        const double dz = currTarget.Z().value() - center.Z().value();  
+        const double dz = currTarget.Z().value() - center.Z().value();
+        for (std::size_t i = 0; i < kTARGET_OMEGAS.size(); ++i)
+        {
+            if (std::abs(omega - kTARGET_OMEGAS[i]) < 1e-9)
+            {
+                dt *= kLEAD_TIME_SCALES[i];
+                break;
+            }
+        }
         const units::radian_t phi{
             (Anti ? -1.0 : 1.0) * omega * dt};
 

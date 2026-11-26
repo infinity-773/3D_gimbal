@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <chrono>
 #include <iostream>
+#include <numeric>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -72,22 +73,38 @@ public:
 	{
 		constexpr int lineHeight = 24;
 		constexpr int margin = 12;
-		int width = 400;
-		for (const auto& field : fields_)
+		constexpr int minColumnWidth = 400;
+		constexpr std::size_t maxRowsPerColumn = 17;
+
+		const std::size_t columnCount =
+			std::max<std::size_t>(1, (fields_.size() + maxRowsPerColumn - 1) / maxRowsPerColumn);
+		std::vector<int> columnWidths(columnCount, minColumnWidth);
+		for (std::size_t i = 0; i < fields_.size(); ++i)
 		{
-			const std::string text = field.first + ": " + field.second;
+			const std::string text = fields_[i].first + ": " + fields_[i].second;
+			int& width = columnWidths[i / maxRowsPerColumn];
 			width = std::max(width, cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX,
 												   0.5, 1, nullptr).width + 2 * margin);
 		}
-		cv::Mat log(std::max(80, static_cast<int>(fields_.size()) * lineHeight + 2 * margin),
-					width, CV_8UC3, cv::Scalar(24, 24, 24));
-		int y = margin + 16;
-		for (const auto& field : fields_)
+
+		const int rows = static_cast<int>(std::min(fields_.size(), maxRowsPerColumn));
+		const int totalWidth = std::accumulate(columnWidths.begin(), columnWidths.end(), 0);
+		cv::Mat log(std::max(80, rows * lineHeight + 2 * margin),
+					totalWidth, CV_8UC3, cv::Scalar(24, 24, 24));
+		int columnX = 0;
+		for (std::size_t column = 0; column < columnCount; ++column)
 		{
-			cv::putText(log, field.first + ": " + field.second, cv::Point(margin, y),
-						cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(230, 230, 230), 1,
-						cv::LINE_AA);
-			y += lineHeight;
+			const std::size_t first = column * maxRowsPerColumn;
+			const std::size_t last = std::min(fields_.size(), first + maxRowsPerColumn);
+			int y = margin + 16;
+			for (std::size_t i = first; i < last; ++i)
+			{
+				cv::putText(log, fields_[i].first + ": " + fields_[i].second,
+							cv::Point(columnX + margin, y), cv::FONT_HERSHEY_SIMPLEX, 0.5,
+							cv::Scalar(230, 230, 230), 1, cv::LINE_AA);
+				y += lineHeight;
+			}
+			columnX += columnWidths[column];
 		}
 		return log;
 	}
@@ -212,8 +229,7 @@ public:
 		}
 	}
 
-	void show(const cv::Mat& image, const cv::Mat& mask,
-			  const cv::Mat& yellowMask) const
+	void show(const cv::Mat& image, const cv::Mat& mask) const
 	{
 		cv::namedWindow("Camera", cv::WINDOW_NORMAL);
 		cv::imshow("Camera", image);
@@ -221,7 +237,6 @@ public:
 		if (showDebug_)
 		{
 			cv::imshow("Mask", mask);
-			cv::imshow("Yellow Mask", yellowMask);
 		}
 	}
 

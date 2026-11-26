@@ -137,7 +137,7 @@ std::vector<Rect> detectColorRing(const Mat& frame, Mat& maskOut, bool isYellow)
         // 外圈圆度
         double experi = arcLength(contours[cnt], true);
         double exArea = contourArea(contours[cnt]);
-        if (experi <= 1e-9)
+        if (experi <= 1e-12)
         {
             continue;
         }
@@ -149,7 +149,7 @@ std::vector<Rect> detectColorRing(const Mat& frame, Mat& maskOut, bool isYellow)
 
         // 内孔也卡一遍
         double inPeri = arcLength(contours[in_cnt], true);
-        if (inPeri <= 1e-9)
+        if (inPeri <= 1e-12)
         {
             continue;
         }
@@ -160,7 +160,7 @@ std::vector<Rect> detectColorRing(const Mat& frame, Mat& maskOut, bool isYellow)
         }
 
         // 内外形状相似
-        if (matchShapes(contours[cnt], contours[in_cnt], CONTOURS_MATCH_I1, 0) > 0.4)
+        if (matchShapes(contours[cnt], contours[in_cnt], CONTOURS_MATCH_I1, 0) > 0.3)
         {
             continue;
         }
@@ -170,7 +170,7 @@ std::vector<Rect> detectColorRing(const Mat& frame, Mat& maskOut, bool isYellow)
         float orad = 0, irad = 0;
         minEnclosingCircle(contours[cnt], oc, orad);
         minEnclosingCircle(contours[in_cnt], ic, irad);
-        if (orad <= 1e-6)
+        if (orad <= 1e-9)
         {
             continue;
         }

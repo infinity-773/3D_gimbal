@@ -15,14 +15,14 @@
 #include <vector>
 
 // 视觉相位量测噪声标准差，单位度；调参时越大越平滑但越滞后。
-inline constexpr double kPHASE_MEASURE_STD_DEG = 1.5;
+inline constexpr double kPHASE_MEASURE_STD_DEG = 1.0;
 // 相位过程噪声强度，rad^2/s。
 inline constexpr double kPHASE_PROCESS_NOISE = 4e-4;
 // 角速度修正量的随机游走强度，(rad/s)^2/s；角速度切换时靠它快速跟上。
-inline constexpr double kRATE_PROCESS_NOISE = 0.5;
+inline constexpr double kRATE_PROCESS_NOISE = 1;
 // 单目标连续出现多久后视为机械状态已重置。
-inline constexpr int kSINGLE_TARGET_RESET_FRAMES = 30;
-// 击发后该时间内，原目标仍亮且又亮起新的未激活目标才确认命中；原目标熄灭而新目标亮起是超时切换。
+inline constexpr int kSINGLE_TARGET_RESET_FRAMES = 20;
+//补发间隔
 inline constexpr int kSWITCH_SHOT_WAIT_MS = 650;
 // 同一目标未命中时最多补发到这个发数，之后等目标变化，避免目标切换后弹仓打空。
 inline constexpr int kSWITCH_MAX_SHOTS_PER_TARGET = 1;
@@ -34,10 +34,12 @@ class TargetMatcherSwitch
 public:
     void initialize(const frc::Translation3d& modelCenter,
                     const frc::Translation3d& firstPosition,
+                    bool anti,
                     int now)
     {
         center_ = modelCenter;
         lastUpdateAt_ = now;
+        anti_ = anti;
         reset();
 
         const auto rotation = posToAngle(firstPosition);
@@ -70,9 +72,14 @@ public:
         advanceRotations(now, omega);
 
         // 只有连续看到单目标达到要求帧数，才把它视为新一轮的开始。
-        const bool singleStable = singleTargetDebouncer_.update(positions.size() == 1);
-        // 刚击发的记录不能被“新一轮”重置冲掉，否则第一发会丢。
-        if (!singleStable_ && singleStable && !pendingShot_ && !shotTarget_)
+        const bool single = positions.size() == 1;
+        if (single && !singleRaw_)
+            singleStartedAt_ = now;
+        singleRaw_ = single;
+        const bool singleStable = singleTargetDebouncer_.update(single);
+        // 只保护单目标出现之后才击发的记录，否则第一发会丢；
+        // 更早的击发记录属于上一轮，必须一起清掉，不能因为它还没结算就跳过重置。
+        if (!singleStable_ && singleStable && lastShotAt_ < singleStartedAt_)
             resetRoundState();
         singleStable_ = singleStable;
 
@@ -97,22 +104,19 @@ public:
         if (pendingShot_)
         {
             const int elapsedMs = now - pendingShot_->firedAt;
+            const int shotIndex = static_cast<int>(pendingShot_->targetIndex);
+            const int refreshed = findRefreshedInactive(
+                *indices, pendingShot_->visibleAtFire);
+            const bool shotStillLit = containsIndex(*indices, shotIndex);
+            if (shotStillLit)
+                pendingShot_->lastSeenAt = now;
 
-            if (elapsedMs < kSWITCH_SHOT_WAIT_MS)
+            // 命中条件是充要的：原目标仍亮，且出现击发时不在画面里的新目标。与耗时无关，
+            // 弹丸飞行或灯效切换再慢、中间丢帧，只要原目标没熄灭就一直等。
+            const bool hit = refreshed >= 0 && shotStillLit;
+            if (hit)
             {
-                const int refreshed = findRefreshedInactive(
-                    *indices, pendingShot_->visibleAtFire);
-                previousIndices_ = *indices;
-                if (refreshed < 0)
-                {
-                    // 没有下一个目标时继续跟随已击发目标，避免云台过早移动带偏弹道。
-                    return positionForIndex(*indices, positions,
-                                            static_cast<int>(pendingShot_->targetIndex));
-                }
-
-                // 命中后原目标会作为已激活靶继续亮；它已熄灭则是超时切换，未命中。
-                if (containsIndex(*indices, static_cast<int>(pendingShot_->targetIndex)))
-                    targets_[pendingShot_->targetIndex].active = true;
+                targets_[pendingShot_->targetIndex].active = true;
                 pendingShot_.reset();
                 shotTarget_.reset();
                 shotCount_ = 0;
@@ -124,8 +128,19 @@ public:
                 return positionForIndex(*indices, positions, refreshed);
             }
 
-            // 未跳变视为未命中：不操作，原目标可继续被选中补发。
-            pendingShot_.reset();
+            if (elapsedMs < kSWITCH_SHOT_WAIT_MS)
+            {
+                previousIndices_ = *indices;
+                // 新目标已亮但原目标这一帧没看到：可能是漏检，也可能是超时切换，先跟随新目标不击发。
+                if (refreshed >= 0)
+                    return positionForIndex(*indices, positions, refreshed);
+                // 没有下一个目标时继续跟随已击发目标，避免云台过早移动带偏弹道。
+                return positionForIndex(*indices, positions, shotIndex);
+            }
+
+            // 窗口结束后允许补发，但继续保留记录等命中；原目标连续熄灭一个窗口才视为超时切换。
+            if (!shotStillLit && now - pendingShot_->lastSeenAt >= kSWITCH_SHOT_WAIT_MS)
+                pendingShot_.reset();
         }
 
         // 已击发目标熄灭后重新亮起，视为新目标，重新计数。
@@ -163,6 +178,7 @@ public:
         }
 
         lastFiredIndex_ = selectedIndex_;
+        lastShotAt_ = now;
         if (shotTarget_ == selectedIndex_)
         {
             ++shotCount_;
@@ -175,12 +191,23 @@ public:
         pendingShot_ = PendingShot{
             .targetIndex = *selectedIndex_,
             .firedAt = now,
+            .lastSeenAt = now,
             .visibleAtFire = previousIndices_};
     }
 
     void markFired()
     {
         markFired(lastUpdateAt_);
+    }
+
+    // 关闭后退回纯开环：相位只按角速度累加，每帧直接以观测角度覆盖，不做滤波。
+    void setUseKalman(bool enabled)
+    {
+        if (useKalman_ == enabled)
+            return;
+        useKalman_ = enabled;
+        if (enabled && initialized_)
+            phaseFilter_.init(phaseFilter_.phase);
     }
 
     void setRecordHitTargets(bool enabled)
@@ -196,6 +223,9 @@ public:
         lastFiredIndex_.reset();
         singleTargetDebouncer_.reset(false);
         singleStable_ = false;
+        singleRaw_ = false;
+        singleStartedAt_ = 0;
+        lastShotAt_ = std::numeric_limits<int>::min();
     }
 
     std::vector<TargetMarker> markers(double radius) const
@@ -234,9 +264,41 @@ public:
         return frc::Translation3d{observed.X(), point.Y(), point.Z()};
     }
 
+    // 观测点当前对应的靶槽位，匹配不上返回 -1。
+    int slotOf(const frc::Translation3d& observed) const
+    {
+        if (!initialized_)
+            return -1;
+        const auto index = match(observed);
+        return index ? static_cast<int>(*index) : -1;
+    }
+
     bool initialized() const
     {
         return initialized_;
+    }
+
+    // 调试用：最近一次相位修正的量测、滤波结果、新息、增益和角速度修正，角度单位为度。
+    struct FilterDebug
+    {
+        double measuredPhaseDeg = 0.0;
+        double filteredPhaseDeg = 0.0;
+        double innovationDeg = 0.0;
+        double gain = 0.0;
+        double rateError = 0.0;
+        double phaseStdDeg = 0.0;
+    };
+
+    FilterDebug filterDebug() const
+    {
+        constexpr double kRadToDeg = 180.0 / std::numbers::pi;
+        return {
+            .measuredPhaseDeg = filterDebug_.measuredPhase * kRadToDeg,
+            .filteredPhaseDeg = phaseFilter_.phase * kRadToDeg,
+            .innovationDeg = phaseFilter_.lastInnovation * kRadToDeg,
+            .gain = phaseFilter_.lastGain,
+            .rateError = phaseFilter_.rateError,
+            .phaseStdDeg = std::sqrt(std::max(phaseFilter_.p00, 0.0)) * kRadToDeg};
     }
 
 private:
@@ -248,6 +310,8 @@ private:
         double p00 = 1.0;
         double p01 = 0.0;
         double p11 = 1.0;
+        double lastInnovation = 0.0;
+        double lastGain = 0.0;
 
         static double wrap(double angle)
         {
@@ -283,6 +347,8 @@ private:
             const double s = p00 + sigma * sigma;
             const double k0 = p00 / s;
             const double k1 = p01 / s;
+            lastInnovation = innovation;
+            lastGain = k0;
             phase = wrap(phase + k0 * innovation);
             rateError += k1 * innovation;
             const double n00 = (1.0 - k0) * p00;
@@ -303,6 +369,7 @@ private:
     {
         std::size_t targetIndex;
         int firedAt;
+        int lastSeenAt;
         std::array<int, 2> visibleAtFire;
     };
 
@@ -423,7 +490,11 @@ private:
         }
 
         const double dt = (now - lastUpdateAt_) / 1000.0;
-        phaseFilter_.predict(dt, (anti_ ? 1 : -1) * omega * dt);
+        const double inputDelta = (anti_ ? 1 : -1) * omega * dt;
+        if (useKalman_)
+            phaseFilter_.predict(dt, inputDelta);
+        else
+            phaseFilter_.phase = PhaseFilter::wrap(phaseFilter_.phase + inputDelta);
         applyPhaseToSlots();
         lastUpdateAt_ = now;
     }
@@ -470,8 +541,20 @@ private:
             return false;
 
         constexpr double kSlotAngle = 2.0 * std::numbers::pi / 5.0;
-        phaseFilter_.correct(rotation->Radians().value() -
-                             static_cast<double>(*anchorIndex) * kSlotAngle);
+        const double measuredPhase = rotation->Radians().value() -
+            static_cast<double>(*anchorIndex) * kSlotAngle;
+        if (useKalman_)
+        {
+            phaseFilter_.correct(measuredPhase);
+        }
+        else
+        {
+            const double wrapped = PhaseFilter::wrap(measuredPhase);
+            phaseFilter_.lastInnovation = PhaseFilter::wrap(wrapped - phaseFilter_.phase);
+            phaseFilter_.lastGain = 1.0;
+            phaseFilter_.phase = wrapped;
+        }
+        filterDebug_.measuredPhase = PhaseFilter::wrap(measuredPhase);
         applyPhaseToSlots();
         return true;
     }
@@ -498,16 +581,26 @@ private:
         return bestMatch;
     }
 
+    struct MeasureDebug
+    {
+        double measuredPhase = 0.0;
+    };
+
     std::array<Target, 5> targets_;
     PhaseFilter phaseFilter_;
+    MeasureDebug filterDebug_;
     frc::Translation3d center_;
     int lastUpdateAt_ = 0;
     bool initialized_ = false;
     bool recordHitTargets_ = true;
-    bool anti_ = true;
+    bool useKalman_ = true;
+    bool anti_ = false;
     Debouncer singleTargetDebouncer_{
         kSINGLE_TARGET_RESET_FRAMES, DebounceEdge::Rising};
     bool singleStable_ = false;
+    bool singleRaw_ = false;
+    int singleStartedAt_ = 0; // 当前这段连续单目标的起点
+    int lastShotAt_ = std::numeric_limits<int>::min();
     std::optional<std::size_t> selectedIndex_;
     std::optional<std::size_t> lastFiredIndex_;
     std::optional<PendingShot> pendingShot_;

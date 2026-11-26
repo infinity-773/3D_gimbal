@@ -465,7 +465,7 @@ private:
     std::array<int, 2> lastIndices{-1, -1};
     bool initialized_ = false;
     bool recordHitTargets_ = true;
-    bool anti_ = true;
+    bool anti_ = false;
     int last_fired_id = -1;
 };
 

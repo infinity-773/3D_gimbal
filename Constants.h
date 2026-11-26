@@ -41,8 +41,8 @@ static const AxisData kSHOOTER_ZERO_5 = AxisData {.yaw=0.0 , .pitch=0.0};
 
 //***************************************HSV****************************************** */
 // 蓝色
-static const cv::Scalar blue_low  = cv::Scalar(70, 15, 15);   
-static const cv::Scalar blue_high = cv::Scalar(180, 255, 255);
+static const cv::Scalar blue_low  = cv::Scalar(90, 150, 15);   
+static const cv::Scalar blue_high = cv::Scalar(130, 255, 255);
 // 红色 H 跨两头 分两段
 static const cv::Scalar red_ranges_low[2]  = {cv::Scalar(0, 130, 40),   cv::Scalar(11, 255, 255)};  
 static const cv::Scalar red_ranges_high[2] = {cv::Scalar(168, 130, 40), cv::Scalar(180, 255, 255)};
@@ -58,9 +58,14 @@ static const double kFocalPx = 1300;
 
 //************************************火控参数*************************************** */
 static const double kAIM_TOLERANCE = 1.5; // 允许的瞄准误差，单位 deg
-static const double kAIM_STABLE_FRAMES = 25;// dont change this
+static const double kAIM_STABLE_FRAMES = 20;// dont change this
 static const int kPushRetractMs = 110; // 推杆回缩脉冲时长
-static const double kCommandSlewRateDegPerSec = 15; // 绝对角度指令最大变化速度
+// 跟随速度 = kp * 角度误差，再限制在 [下限, 上限]；离目标远时自动加速，靠近时降到下限。
+static const double kCommandSlewKp = 5.0;               // 1/s，每 1° 误差对应的速度 deg/s
+static const double kCommandSlewMinDegPerSec = 15;      // 跟随速度下限
+static const double kCommandSlewMaxDegPerSec = 30;      // 跟随速度上限
+// 每档角速度各自的提前时间系数，与 kTARGET_OMEGAS 一一对应；实际提前时间 = 基础提前时间 * 系数。
+static constexpr std::array<double, 3> kLEAD_TIME_SCALES{1.0, 0.9, 1.0};
 
 //************************************拟合参数****************************************** */
 static const int kPOINTS_NUM = 60;
@@ -72,13 +77,16 @@ static const double kMODEL_RES_TOLERANCE = 0.0050;
 //目标匹配
 static const units::degree_t kTARGET_MATCH_TOLERANCE = units::degree_t{15.0}; // 目标匹配容差
 static const int kTARGET_HIT_CONFIRM_FRAMES = 20; // 发射后延迟确认当前目标已命中
-static const double kOMEGA_SWITCH_LOCKOUT_MS = 100; // 角速度切换锁定时间，单位毫秒
 static const double kACTIVE_CONFIRM_MS = 200;
-static const int kOMEGA_PERIOD_MS = 6000; // 角速度切换周期
+static const int kSWITCH_STABLE_FRAMES = 10;
+static const int kSWITCH_STABLE_MS = 400;
+static const int kOMEGA_PERIOD_MS = 6100; // 角速度切换周期
+static const double kFIT_WINDOW_SEC = 0.5;
 static const int kOMEGA_FIRE_BLOCK_MS = 700; // 切换前禁用开火的时长
 static constexpr std::array<double, 3> kTARGET_OMEGAS{
     std::numbers::pi / 3.0,
     std::numbers::pi / 2.0,
     2.0 * std::numbers::pi / 3.0}; // 三档目标角速度，单位 rad/s，仅用于提前量
+
 
 #endif

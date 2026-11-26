@@ -181,8 +181,10 @@ struct OmegaSample
 class OmegaEstimator
 {
 public:
+    // slotId 是 target 当前对应的靶槽位，<0 表示未知。圆心拟合有误差时，不同槽位的观测角相对
+    // 理想 72° 间隔会有突变，换槽位的那一帧不能把突变算进角速度斜率。
     bool updateOmega(int now, const frc::Translation3d& target,
-                     const frc::Translation3d& center3D)
+                     const frc::Translation3d& center3D, int slotId = -1)
     {
         const auto angle = ToYZ(target, center3D).Angle();
         if (!angle)
@@ -197,6 +199,7 @@ public:
         {
             samples_.push_back({timeSec, wrappedPhase});
             lastWrappedPhase_ = wrappedPhase;
+            lastSlotId_ = slotId;
             ready_ = false;
             return false;
         }
@@ -204,10 +207,20 @@ public:
         constexpr double slotAngle = 2.0 * std::numbers::pi / 5.0;
         double delta = std::remainder(
             wrappedPhase - lastWrappedPhase_, slotAngle);
+        const bool slotChanged = slotId >= 0 && lastSlotId_ >= 0 && slotId != lastSlotId_;
+        if (slotChanged && ready_)
+        {
+            // 换靶：用上一段拟合的斜率外推，吸收掉两个槽位之间的角度突变。
+            delta = lastFittedOmega_ * (timeSec - samples_.back().timeSec);
+        }
         const double unwrappedPhase = samples_.back().phaseRad + delta;
         lastWrappedPhase_ = wrappedPhase;
+        lastSlotId_ = slotId;
         samples_.push_back({timeSec, unwrappedPhase});
-        if (samples_.size() > 20)
+        // 按时间而不是按帧数取窗口，帧率高时才不会因窗口过短而噪声变大。
+        const double kFitWindowSec = kFIT_WINDOW_SEC;
+        while (samples_.size() > 8 &&
+               samples_.back().timeSec - samples_.front().timeSec > kFitWindowSec)
         {
             samples_.pop_front();
         }
@@ -246,6 +259,7 @@ public:
             ready_ = false;
             return false;
         }
+        lastFittedOmega_ = fittedOmega;
         measuredOmega_ = std::abs(fittedOmega);
         matchedOmega_ = matchOmega(measuredOmega_, now);
         ready_ = true;
@@ -256,6 +270,8 @@ public:
     {
         samples_.clear();
         lastWrappedPhase_ = 0.0;
+        lastSlotId_ = -1;
+        lastFittedOmega_ = 0.0;
         measuredOmega_ = 0.0;
         pendingOmega_ = matchedOmega_;
         pendingFrames_ = 0;
@@ -299,8 +315,9 @@ private:
                 return std::abs(lhs - measuredOmega) <
                        std::abs(rhs - measuredOmega);
             });
-        constexpr double kSwitchMargin = 0.20;
-        constexpr int kSwitchStableFrames = 5;
+        const double kSwitchMargin = 0.20;
+        const int kSwitchStableFrames = kSWITCH_STABLE_FRAMES;
+        const int kSwitchStableMs = kSWITCH_STABLE_MS;
         // 初始值只是默认假设，首次拟合直接采用，不计为一次切换。
         if (!locked_)
         {
@@ -327,7 +344,8 @@ private:
             pendingFrames_ = 1;
             pendingStartMs_ = now;
         }
-        if (pendingFrames_ >= kSwitchStableFrames)
+        if (pendingFrames_ >= kSwitchStableFrames &&
+            now - pendingStartMs_ >= kSwitchStableMs)
         {
             ++switchCount_;
             switchOriginMs_ = pendingStartMs_;
@@ -338,6 +356,8 @@ private:
 
     std::deque<OmegaSample> samples_;
     double lastWrappedPhase_ = 0.0;
+    int lastSlotId_ = -1;
+    double lastFittedOmega_ = 0.0;
     double measuredOmega_ = 0.0;
     double matchedOmega_ = kTARGET_OMEGAS[1];
     double pendingOmega_ = kTARGET_OMEGAS[1];
