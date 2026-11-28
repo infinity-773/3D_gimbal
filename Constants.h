@@ -41,7 +41,7 @@ static const AxisData kSHOOTER_ZERO_5 = AxisData {.yaw=0.0 , .pitch=0.0};
 
 //***************************************HSV****************************************** */
 // 蓝色
-static const cv::Scalar blue_low  = cv::Scalar(90, 150, 15);   
+static const cv::Scalar blue_low  = cv::Scalar(90, 90, 35);   
 static const cv::Scalar blue_high = cv::Scalar(130, 255, 255);
 // 红色 H 跨两头 分两段
 static const cv::Scalar red_ranges_low[2]  = {cv::Scalar(0, 130, 40),   cv::Scalar(11, 255, 255)};  
@@ -83,6 +83,10 @@ static const int kSWITCH_STABLE_MS = 400;
 static const int kOMEGA_PERIOD_MS = 6100; // 角速度切换周期
 static const double kFIT_WINDOW_SEC = 0.5;
 static const int kOMEGA_FIRE_BLOCK_MS = 700; // 切换前禁用开火的时长
+static const double kOMEGA_START_THRESHOLD = 0.6; // 拟合角速度(rad/s)由低升过该值，视为开局转动
+static const int kOMEGA_START_STABLE_FRAMES = 5; // 角速度连续高于阈值的帧数，用于去抖
+static const int kOMEGA_SETTLE_MS = 600; // 检测到角速度从 0 开始增大后，等待角速度从 0 爬升稳定再允许驱动云台和开火的时长
+static constexpr double kFIXED_OMEGA = std::numbers::pi / 3.0; // 定速模式的开环角速度，单位 rad/s
 static constexpr std::array<double, 3> kTARGET_OMEGAS{
     std::numbers::pi / 3.0,
     std::numbers::pi / 2.0,

@@ -100,12 +100,12 @@ int cameraAutoExposure = 1;
 // 单位：100 us，即 19 = 1.9 ms，166 = 16.6 ms。
 // 实际时间范围：0.1～1000 ms。
 // 作用：增大通常更亮，但运动拖影更明显，过长还可能降低实际帧率。
-int cameraExposure = 11;
+int cameraExposure = 13;
 
 // 亮度
 // 范围：-64～64，步长 1，默认 0。
 // 作用：调整画面整体明暗。
-int cameraBrightness = 10;
+int cameraBrightness = 12;
 
 // 对比度
 // 范围：0～100，步长 1，默认 35。
@@ -185,13 +185,15 @@ static double g_commandYaw = 0.0;
 static double g_commandPitch = 0.0;
 static bool hasYellow = true;
 bool useOmega = true; // 是否使用模型预测
-bool ifRecordHit = true; // 是否记录已击打目标；关闭后所有目标始终视为未激活
+bool ifRecordHit = false; // 是否记录已击打目标；关闭后所有目标始终视为未激活
 bool useKalman = false; // 靶号相位是否使用卡尔曼滤波；关闭后退回开环累加+每帧直接用观测角覆盖
-bool isAnti = true; // 是否为逆时针
+bool isAnti = false; // 是否为逆时针
+bool isFixedSpeed = false; // 是否为定速模式；开启后角速度开环取 kFIXED_OMEGA，不做匹配，也不在切换前禁火，仍保留开局禁用
 
 
 
 Debouncer modelLockDebouncer(kMODEL_STABLE_FRAMES, DebounceEdge::Rising);
+static Debouncer omegaStartDebouncer(kOMEGA_START_STABLE_FRAMES, DebounceEdge::Rising);
 static CenterEstimator estimator = CenterEstimator(kCENTER_IN_BASE, kTRAJECTORY_RADIUS);
 static frc::Translation3d center = kCENTER_IN_BASE;
 static double omega = kTARGET_OMEGAS[1];
@@ -199,8 +201,10 @@ static bool g_omegaSwitchLockoutActive = false;
 static std::chrono::steady_clock::time_point g_omegaSwitchedAt;
 static TargetMatcherSwitch targetMatcher;
 static OmegaEstimator omegaEstimator;
-static int g_omegaCycleStartMs = -1; // 首次扫到目标或最近一次角速度切换的起点
+static int g_omegaCycleStartMs = -1; // 目标开始转动或最近一次角速度切换的起点
 static int g_omegaSwitchSeen = 0;
+static int g_omegaSettleUntilMs = -1;
+static bool g_omegaSeenStill = false; // 已观察到开局前的静止状态
 
 
 
@@ -511,7 +515,7 @@ int main()
                 center = estimator.getExpCenter();
                 targetMatcher.initialize(center, targetsInBase[0], isAnti,controllerNow);
                 omegaEstimator.reset();
-                omega = kTARGET_OMEGAS[1];
+                omega = isFixedSpeed ? kFIXED_OMEGA : kTARGET_OMEGAS[1];
                 g_modelAccepted = true;
                 std::cout << "模型首次接受，后续持续使用拟合圆心。\n";
             }
@@ -524,6 +528,9 @@ int main()
         
         targetMatcher.setRecordHitTargets(ifRecordHit);
         targetMatcher.setUseKalman(useKalman);
+        // 定速模式直接开环使用设定角速度；拟合仍照常运行，只用来判断开局是否已转动。
+        if (isFixedSpeed)
+            omega = kFIXED_OMEGA;
         std::optional<frc::Translation3d> currentTarget;
         if (g_modelAccepted && !hasYellow)
         {
@@ -531,14 +538,33 @@ int main()
         }
         if (g_modelAccepted && currentTarget &&
             omegaEstimator.updateOmega(controllerNow, *currentTarget, center,
-                                   targetMatcher.slotOf(*currentTarget)))
+                                   targetMatcher.slotOf(*currentTarget)) &&
+            !isFixedSpeed)
         {
             omega = omegaEstimator.getOmega();
         }
 
-        if (g_omegaCycleStartMs < 0 && targetProjectionValid)
-            g_omegaCycleStartMs = controllerNow;
-        if (omegaEstimator.switchCount() != g_omegaSwitchSeen)
+        // 开局前目标静止（或只在槽位间跳变），拟合角速度接近 0；
+        // 先观察到低角速度，再连续若干帧高于阈值，才视为开局转动。
+        // useOmega 关闭用于测试静止靶，此时角速度无意义，不做开局判断，也不禁火。
+        if (useOmega && g_omegaCycleStartMs < 0)
+        {
+            const bool omegaReady = omegaEstimator.ready();
+            const bool omegaMoving = omegaReady &&
+                omegaEstimator.getMeasuredOmega() >= kOMEGA_START_THRESHOLD;
+            if (omegaReady && !omegaMoving)
+            {
+                g_omegaSeenStill = true;
+            }
+            if (omegaStartDebouncer.update(omegaMoving) && g_omegaSeenStill)
+            {
+                // 拟合窗口有滞后，把周期起点向前推半个窗口。
+                g_omegaCycleStartMs = controllerNow -
+                    static_cast<int>(kFIT_WINDOW_SEC * 500.0);
+                g_omegaSettleUntilMs = controllerNow + kOMEGA_SETTLE_MS;
+            }
+        }
+        if (useOmega && omegaEstimator.switchCount() != g_omegaSwitchSeen)
         {
             g_omegaSwitchSeen = omegaEstimator.switchCount();
             g_omegaCycleStartMs = std::min(controllerNow, omegaEstimator.lastSwitchOriginMs());
@@ -546,8 +572,10 @@ int main()
         // 每个周期末尾的禁火窗口；取模使角速度未变化时也能循环。
         const int omegaCycleElapsedMs = g_omegaCycleStartMs >= 0
             ? (controllerNow - g_omegaCycleStartMs) % kOMEGA_PERIOD_MS : 0;
-        const bool omegaFireBlocked = g_omegaCycleStartMs >= 0 &&
-            omegaCycleElapsedMs >= kOMEGA_PERIOD_MS - kOMEGA_FIRE_BLOCK_MS;
+        const bool omegaSettling = controllerNow < g_omegaSettleUntilMs;
+        const bool omegaFireBlocked = omegaSettling ||
+            (useOmega && !isFixedSpeed && g_omegaCycleStartMs >= 0 &&
+             omegaCycleElapsedMs >= kOMEGA_PERIOD_MS - kOMEGA_FIRE_BLOCK_MS);
 
         frc::Translation3d expTarget = center;
         if (currentTarget)
@@ -572,12 +600,14 @@ int main()
         }
   
         AxisData angles = getShootAngles(expTarget);
-        AxisData AnglesWithLead = withLead(angles, -2.5, -3.7);
+        //5 : -1.2 -0.9 
+        //3 : -2.5 -3.7
+        AxisData AnglesWithLead = withLead(angles, -1.2, -0.9);
 
         frc::Translation3d trueTarget = AimSolver::getPhaseAtTime(
             0.15, expTarget, center, omega, !isAnti);
 
-        AxisData trueAngle = withLead(getShootAngles(trueTarget), -2.5, -3.7);
+        AxisData trueAngle = withLead(getShootAngles(trueTarget), -1.2, -0.9);
 
 
 
@@ -585,8 +615,12 @@ int main()
         sendData.Gimbal_Ctrl = 1;
         const bool aimTargetValid = currentTarget.has_value() && g_modelAccepted &&
             std::isfinite(AnglesWithLead.yaw) && std::isfinite(AnglesWithLead.pitch);
-        const double desiredYaw = aimTargetValid ? AnglesWithLead.yaw : 0.0;
-        const double desiredPitch = aimTargetValid ? AnglesWithLead.pitch : 0.0;
+        // 开局角速度爬升的稳定期内保持当前指令，不驱动云台
+        const bool holdAim = omegaSettling && g_commandInitialized;
+        const double desiredYaw = holdAim ? g_commandYaw
+            : (aimTargetValid ? AnglesWithLead.yaw : 0.0);
+        const double desiredPitch = holdAim ? g_commandPitch
+            : (aimTargetValid ? AnglesWithLead.pitch : 0.0);
 
         double slewRateYaw = 0.0;
         double slewRatePitch = 0.0;
@@ -663,7 +697,10 @@ int main()
             .receivedAt = frameReceivedAt};
         dashboard.updateLog(dashboardFrame);
         dashboard.setLogField("omega fire block", omegaFireBlocked ? "yes" : "no");
-        dashboard.setLogField("omega switch countdown", g_omegaCycleStartMs >= 0
+        dashboard.setLogField("fixed speed mode", isFixedSpeed ? "ON" : "OFF");
+        dashboard.setLogField("omega switch countdown", !useOmega ? "useOmega off"
+            : isFixedSpeed ? "fixed speed"
+            : g_omegaCycleStartMs >= 0
             ? cv::format("%.2f s (block in %.2f s)",
                 (kOMEGA_PERIOD_MS - omegaCycleElapsedMs) / 1000.0,
                 std::max(0, kOMEGA_PERIOD_MS - kOMEGA_FIRE_BLOCK_MS - omegaCycleElapsedMs) / 1000.0)
